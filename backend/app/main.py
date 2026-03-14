@@ -12,6 +12,7 @@ from app.routers import health, bundles
 async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
     # Create tables
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
     # Ensure upload directory exists
