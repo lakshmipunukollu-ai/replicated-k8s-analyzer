@@ -14,3 +14,5 @@ target/
 .gradle/
 *.class
 .DS_Store
+uploads/
+*.tar.gz
