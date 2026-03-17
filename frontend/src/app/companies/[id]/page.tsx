@@ -53,6 +53,10 @@ export default function CompanyDetailPage() {
   const [projectBundles, setProjectBundles] = useState<{ id: string; filename: string; status: string; upload_time: string; finding_count: number }[]>([]);
   const [bundlesLoading, setBundlesLoading] = useState(false);
   const [versionCorrelations, setVersionCorrelations] = useState<VersionCorrelation[]>([]);
+  const [deleteCompanyModal, setDeleteCompanyModal] = useState(false);
+  const [deletingCompany, setDeletingCompany] = useState(false);
+  const [deleteProjectModal, setDeleteProjectModal] = useState<ProjectRow | null>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -83,6 +87,30 @@ export default function CompanyDetailPage() {
       .then((data) => { setProjectBundles(Array.isArray(data) ? data : []); setBundlesLoading(false); })
       .catch(() => { setProjectBundles([]); setBundlesLoading(false); });
   }, [selectedProjectId]);
+
+  const confirmDeleteCompany = async () => {
+    if (!company) return;
+    setDeletingCompany(true);
+    try {
+      await fetch(`${API}/companies/${id}`, { method: 'DELETE' });
+      router.push('/companies');
+    } finally {
+      setDeletingCompany(false);
+    }
+  };
+
+  const confirmDeleteProject = async () => {
+    if (!deleteProjectModal) return;
+    setDeletingProject(true);
+    try {
+      await fetch(`${API}/companies/${id}/projects/${deleteProjectModal.id}`, { method: 'DELETE' });
+      setCompany((prev) => prev ? { ...prev, projects: prev.projects.filter((p) => p.id !== deleteProjectModal.id) } : null);
+      setDeleteProjectModal(null);
+      if (selectedProjectId === deleteProjectModal.id) setSelectedProjectId(null);
+    } finally {
+      setDeletingProject(false);
+    }
+  };
 
   const handleCreateProject = async () => {
     if (!newProjectName.trim()) return;
@@ -135,12 +163,21 @@ export default function CompanyDetailPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
-          <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#1e293b', margin: 0 }}>{company.name}</h1>
-          {tierBadge(company.tier)}
+      <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
+            <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#1e293b', margin: 0 }}>{company.name}</h1>
+            {tierBadge(company.tier)}
+          </div>
+          <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>{company.slug}</p>
         </div>
-        <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>{company.slug}</p>
+        <button
+          type="button"
+          onClick={() => setDeleteCompanyModal(true)}
+          style={{ padding: '6px 14px', border: '1px solid #e2e8f0', borderRadius: '6px', background: '#fff', color: '#64748b', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}
+        >
+          Delete Company
+        </button>
       </div>
 
       <div style={{ marginBottom: '24px' }}>
@@ -191,6 +228,15 @@ export default function CompanyDetailPage() {
                   {p.bundle_count} bundle{p.bundle_count !== 1 ? 's' : ''}
                   {p.last_bundle_date && ` · Last ${new Date(p.last_bundle_date).toLocaleDateString()}`}
                 </span>
+                {isHovered && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setDeleteProjectModal(p); }}
+                    style={{ padding: '4px 10px', border: '1px solid #e2e8f0', borderRadius: '5px', background: '#fff', color: '#64748b', fontSize: '11px', fontWeight: 500, cursor: 'pointer' }}
+                  >
+                    Delete
+                  </button>
+                )}
                 <span style={{ fontSize: '12px', color: isSelected || isHovered ? '#1e40af' : '#94a3b8', fontWeight: 500 }}>
                   View bundles →
                 </span>
@@ -199,6 +245,32 @@ export default function CompanyDetailPage() {
           );
         })}
       </div>
+
+      {deleteCompanyModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => !deletingCompany && setDeleteCompanyModal(false)}>
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '400px', maxWidth: '90%', boxShadow: '0 10px 40px rgba(0,0,0,0.15)' }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#1e293b', marginBottom: '12px' }}>Delete {company.name}?</h2>
+            <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '20px', lineHeight: 1.5 }}>This will also delete all their projects. Bundles will not be deleted but will become unassigned. This cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => !deletingCompany && setDeleteCompanyModal(false)} style={{ padding: '8px 16px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: deletingCompany ? 'not-allowed' : 'pointer', fontWeight: 500 }}>Cancel</button>
+              <button type="button" onClick={confirmDeleteCompany} disabled={deletingCompany} style={{ padding: '8px 16px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: deletingCompany ? 'not-allowed' : 'pointer', fontWeight: 600 }}>{deletingCompany ? 'Deleting…' : 'Delete'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteProjectModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => !deletingProject && setDeleteProjectModal(null)}>
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '400px', maxWidth: '90%', boxShadow: '0 10px 40px rgba(0,0,0,0.15)' }} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ fontSize: '18px', fontWeight: 600, color: '#1e293b', marginBottom: '12px' }}>Delete this project?</h2>
+            <p style={{ fontSize: '14px', color: '#64748b', marginBottom: '20px', lineHeight: 1.5 }}>Bundles will become unassigned. This cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => !deletingProject && setDeleteProjectModal(null)} style={{ padding: '8px 16px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: deletingProject ? 'not-allowed' : 'pointer', fontWeight: 500 }}>Cancel</button>
+              <button type="button" onClick={confirmDeleteProject} disabled={deletingProject} style={{ padding: '8px 16px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: deletingProject ? 'not-allowed' : 'pointer', fontWeight: 600 }}>{deletingProject ? 'Deleting…' : 'Delete'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: '24px' }}>
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#1e293b', marginBottom: '12px' }}>Version Health</h2>

@@ -20,8 +20,11 @@ from app.services.chat_service import BundleChatService
 from app.services.timeline_service import TimelineService
 from app.services.playbook_service import PlaybookService
 from app.services.comparison_service import BundleComparisonService
+from app.services.s3_service import S3Service
 from app.config import settings
 import anthropic
+
+_s3 = S3Service()
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
 
@@ -90,6 +93,14 @@ def upload_bundle(
     db.commit()
     db.refresh(bundle)
 
+    if settings.USE_S3:
+        try:
+            s3_key = _s3.upload_bundle(file_path, bundle_id, file.filename)
+            bundle.s3_key = s3_key
+            db.commit()
+        except Exception:
+            pass  # keep local file; analysis can proceed
+
     return {
         "id": bundle.id,
         "filename": bundle.filename,
@@ -155,6 +166,14 @@ def intake_bundle_from_url(
     db.add(bundle)
     db.commit()
     db.refresh(bundle)
+
+    if settings.USE_S3:
+        try:
+            s3_key = _s3.upload_bundle(file_path, bundle_id, filename)
+            bundle.s3_key = s3_key
+            db.commit()
+        except Exception:
+            pass
 
     background_tasks.add_task(run_analysis, bundle_id)
 
@@ -254,8 +273,14 @@ def delete_bundle(bundle_id: str, db: Session = Depends(get_db)):
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    s3_key = bundle.s3_key
     db.delete(bundle)
     db.commit()
+    if s3_key:
+        try:
+            _s3.delete_bundle(s3_key)
+        except Exception:
+            pass
     return {"deleted": True, "id": bundle_id}
 
 
@@ -403,8 +428,14 @@ def run_analysis(bundle_id: str):
         bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
         if not bundle:
             return
+        file_path = _s3.ensure_bundle_local(bundle.file_path or "", bundle.s3_key)
+        if not file_path or not os.path.isfile(file_path):
+            bundle.status = "failed"
+            bundle.error_message = "Bundle file not found locally or in S3"
+            db.commit()
+            return
         analyzer = BundleAnalyzer()
-        asyncio.run(analyzer.analyze(bundle_id, bundle.file_path, db))
+        asyncio.run(analyzer.analyze(bundle_id, file_path, db))
         bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
         if bundle and bundle.status == "completed":
             bundle.summary = None  # clear any stale cached value
@@ -434,7 +465,7 @@ def stream_analysis(bundle_id: str, db: Session = Depends(get_db)):
         from app.services.signal_extractor import SignalExtractor
 
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        extractor = BundleExtractor()
+        extractor = BundleExtractor(settings.UPLOAD_DIR)
         signal_extractor = SignalExtractor()
 
         bundle.status = "analyzing"
@@ -443,7 +474,14 @@ def stream_analysis(bundle_id: str, db: Session = Depends(get_db)):
 
         yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting bundle contents...'})}\n\n"
 
-        bundle_data = extractor.extract(bundle.file_path)
+        file_path = _s3.ensure_bundle_local(bundle.file_path or "", bundle.s3_key)
+        if not file_path or not os.path.isfile(file_path):
+            bundle.status = "failed"
+            bundle.error_message = "Bundle file not found"
+            db.commit()
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Bundle file not found'})}\n\n"
+            return
+        bundle_data = extractor.extract(file_path)
         signals = signal_extractor.extract(bundle_data)
         total_files = bundle_data["total_files"]
         yield f"data: {json.dumps({'type': 'status', 'message': f'Found {total_files} files — scanning for failure patterns...'})}\n\n"
@@ -836,11 +874,21 @@ def get_evidence_file(bundle_id: str, path: str, db: Session = Depends(get_db)):
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    file_path = bundle.file_path or ""
+    existed = os.path.isfile(file_path)
+    file_path = _s3.ensure_bundle_local(file_path, bundle.s3_key)
+    if not file_path or not os.path.isfile(file_path):
+        return {"path": path.strip(), "content": "", "lines": [], "error": "File not found"}
     from app.services.extractor import BundleExtractor
     extractor = BundleExtractor(settings.UPLOAD_DIR)
     try:
-        bundle_data = extractor.extract(bundle.file_path)
+        bundle_data = extractor.extract(file_path)
     except Exception:
+        if bundle.s3_key and not existed and os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
         return {"path": path.strip(), "content": "", "lines": [], "error": "File not found"}
     files_by_category = bundle_data.get("files") or {}
     all_files = []
@@ -915,6 +963,11 @@ def get_evidence_file(bundle_id: str, path: str, db: Session = Depends(get_db)):
     print(f"[evidence] all matches found: {all_matches[:10]}")
     print(f"[evidence] chose: {resolved_path}")
     if not resolved_path:
+        if bundle.s3_key and not existed and os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
         return {
             "path": path_clean,
             "content": "",
@@ -927,6 +980,11 @@ def get_evidence_file(bundle_id: str, path: str, db: Session = Depends(get_db)):
     if "\x00" in content:
         return {"path": path_clean, "content": "", "lines": [], "error": "File contains binary data, cannot display"}
     lines = content.split("\n")
+    if bundle.s3_key and not existed and os.path.isfile(file_path):
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
     return {"path": path_clean, "content": content, "lines": lines}
 
 
@@ -1321,9 +1379,9 @@ def get_cluster_profile(bundle_id: str, db: Session = Depends(get_db)):
 
     from app.services.extractor import BundleExtractor
     extractor = BundleExtractor(settings.UPLOAD_DIR)
-
+    file_path = _s3.ensure_bundle_local(bundle.file_path or "", bundle.s3_key)
     try:
-        bundle_data = extractor.extract(bundle.file_path)
+        bundle_data = extractor.extract(file_path)
     except Exception:
         return {"bundle_id": bundle_id, "profile": None}
 

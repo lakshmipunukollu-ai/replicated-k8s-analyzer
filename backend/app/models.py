@@ -37,6 +37,7 @@ class Bundle(Base):
     filename = Column(String(255), nullable=False)
     file_size = Column(BigInteger, default=0)
     file_path = Column(String(500), nullable=True)
+    s3_key = Column(String(500), nullable=True)
     status = Column(String(50), default="uploaded")
     previous_status = Column(String(50), nullable=True)  # set when archiving, used by restore
     upload_time = Column(DateTime, default=datetime.utcnow)

@@ -34,6 +34,7 @@ def migrate():
             "ALTER TABLE bundles ADD COLUMN IF NOT EXISTS triage_status VARCHAR(50) DEFAULT 'unassigned'",
             "ALTER TABLE bundles ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP",
             "ALTER TABLE bundles ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP",
+            "ALTER TABLE bundles ADD COLUMN IF NOT EXISTS s3_key VARCHAR(500)",
         ]:
             conn.execute(sa.text(col_sql))
     print("Migration complete.")

@@ -73,6 +73,34 @@ def create_company(body: CompanyCreate, db: Session = Depends(get_db)):
     }
 
 
+@router.delete("/companies/{company_id}")
+def delete_company(company_id: str, db: Session = Depends(get_db)):
+    """Delete a company. Unassigns bundles (company_id and project_id set to NULL); deletes all projects and the company."""
+    company = db.query(Company).filter(Company.id == company_id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    project_ids = [p.id for p in db.query(Project).filter(Project.company_id == company_id).all()]
+    db.query(Bundle).filter(Bundle.company_id == company_id).update({Bundle.company_id: None})
+    for pid in project_ids:
+        db.query(Bundle).filter(Bundle.project_id == pid).update({Bundle.project_id: None})
+    db.query(Project).filter(Project.company_id == company_id).delete()
+    db.delete(company)
+    db.commit()
+    return {"deleted": True}
+
+
+@router.delete("/companies/{company_id}/projects/{project_id}")
+def delete_project(company_id: str, project_id: str, db: Session = Depends(get_db)):
+    """Delete a project. Unassigns bundles (project_id set to NULL); deletes the project."""
+    project = db.query(Project).filter(Project.id == project_id, Project.company_id == company_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    db.query(Bundle).filter(Bundle.project_id == project_id).update({Bundle.project_id: None})
+    db.delete(project)
+    db.commit()
+    return {"deleted": True}
+
+
 @router.get("/companies/{company_id}")
 def get_company(company_id: str, db: Session = Depends(get_db)):
     """Get company with nested projects and health_history (one entry per completed bundle)."""
