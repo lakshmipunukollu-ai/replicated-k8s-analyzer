@@ -1,0 +1,4 @@
+2026-03-16T09:55:00Z Warning MemoryPressure node/worker-1: Node condition MemoryPressure is True
+2026-03-16T09:57:00Z Warning OOMKilling node/worker-1: Memory cgroup out of memory: Kill process
+2026-03-16T09:58:00Z Warning Evicted pod/cache-server: The node was low on resource: memory
+2026-03-16T10:00:00Z Warning DiskPressure node/worker-2: Node condition DiskPressure is True

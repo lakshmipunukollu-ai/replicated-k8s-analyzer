@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: gauntlet-replicated-k8s-analyzer
+    env: python
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false

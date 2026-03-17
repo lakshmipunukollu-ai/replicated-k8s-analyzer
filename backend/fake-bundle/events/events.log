@@ -1,0 +1,4 @@
+LAST SEEN   TYPE      REASON              OBJECT              MESSAGE
+2m          Warning   OOMKilling          node/worker-1       Memory cgroup out of memory
+5m          Warning   MemoryPressure      node/worker-1       Node condition MemoryPressure
+10m         Warning   BackOff             pod/api-server      Back-off restarting failed container

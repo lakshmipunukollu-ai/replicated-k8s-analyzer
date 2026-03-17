@@ -1,0 +1,4 @@
+2026-03-16T10:00:00Z api-server INFO Starting server
+2026-03-16T10:01:00Z api-server WARN Memory usage high: 480Mi/512Mi
+2026-03-16T10:02:00Z api-server ERROR OOMKilled: container api-server exceeded memory limit
+2026-03-16T10:02:01Z api-server ERROR CrashLoopBackOff for container api-server

@@ -14,9 +14,28 @@ from app.schemas import (
     ReportSummary, FindingResponse, AnalyzeResponse
 )
 from app.services.analyzer import BundleAnalyzer
+from app.services.chat_service import BundleChatService
+from app.services.timeline_service import TimelineService
+from app.services.playbook_service import PlaybookService
+from app.services.comparison_service import BundleComparisonService
 from app.config import settings
+import anthropic
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
+
+
+def _evidence_str(evidence) -> str:
+    if not evidence:
+        return ""
+    if isinstance(evidence, list):
+        parts = []
+        for x in evidence[:5]:
+            if isinstance(x, dict):
+                parts.append(str(x.get("content") or x.get("source") or x))
+            else:
+                parts.append(str(x))
+        return " ".join(parts)
+    return str(evidence)
 
 
 @router.post("/upload", status_code=201)
@@ -281,3 +300,212 @@ def get_report(bundle_id: str, db: Session = Depends(get_db)):
         ),
         findings=finding_responses
     )
+
+
+@router.post("/compare")
+def compare_bundles(
+    body: dict,
+    db: Session = Depends(get_db)
+):
+    """Compare two bundles and return a diff of findings."""
+    bundle_a_id = body.get("bundle_a_id")
+    bundle_b_id = body.get("bundle_b_id")
+    if not bundle_a_id or not bundle_b_id:
+        raise HTTPException(status_code=400, detail="Both bundle_a_id and bundle_b_id required")
+    bundle_a = db.query(Bundle).filter(Bundle.id == bundle_a_id).first()
+    bundle_b = db.query(Bundle).filter(Bundle.id == bundle_b_id).first()
+    if not bundle_a or not bundle_b:
+        raise HTTPException(status_code=404, detail="One or both bundles not found")
+    findings_a = db.query(Finding).filter(Finding.bundle_id == bundle_a_id).all()
+    findings_b = db.query(Finding).filter(Finding.bundle_id == bundle_b_id).all()
+    service = BundleComparisonService()
+    result = service.compare(bundle_a, bundle_b, findings_a, findings_b)
+    return result
+
+
+@router.post("/{bundle_id}/chat")
+def chat_with_bundle(
+    bundle_id: str,
+    body: dict,
+    db: Session = Depends(get_db)
+):
+    """Ask AI questions about a specific bundle."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    question = body.get("question", "")
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required")
+    service = BundleChatService()
+    answer = service.answer(bundle, findings, question)
+    return {"answer": answer, "bundle_id": bundle_id}
+
+
+@router.get("/{bundle_id}/timeline")
+def get_bundle_timeline(
+    bundle_id: str,
+    db: Session = Depends(get_db)
+):
+    """Get reconstructed incident timeline from bundle logs."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    service = TimelineService()
+    events = service.build_timeline(bundle, findings)
+    return {"bundle_id": bundle_id, "events": events}
+
+
+@router.get("/{bundle_id}/playbook")
+def get_remediation_playbook(
+    bundle_id: str,
+    db: Session = Depends(get_db)
+):
+    """Generate kubectl remediation playbook for all findings."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    service = PlaybookService()
+    playbook = service.generate(bundle, findings)
+    return {"bundle_id": bundle_id, "playbook": playbook}
+
+
+@router.get("/{bundle_id}/summary")
+def get_bundle_summary(bundle_id: str, db: Session = Depends(get_db)):
+    """Get AI-generated natural language summary of the bundle."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    findings_text = "\n".join([
+        f"- [{f.severity.upper()}] {f.title}: {f.summary or ''}. Root cause: {f.root_cause or ''}"
+        for f in findings
+    ])
+
+    critical_count = len([f for f in findings if f.severity == 'critical'])
+    high_count = len([f for f in findings if f.severity == 'high'])
+
+    health_score = max(0, 100 - (critical_count * 25) - (high_count * 10) - (len(findings) * 3))
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=300,
+        messages=[{"role": "user", "content": f"""You are a senior SRE writing a one-paragraph incident summary for a Kubernetes cluster.
+Write exactly ONE paragraph (3-5 sentences) in plain English, written as if a senior engineer is briefing their team.
+Be specific about what's broken, why, and what the impact is. Do not use bullet points or headers.
+
+Bundle: {bundle.filename}
+Findings ({len(findings)} total, {critical_count} critical, {high_count} high):
+{findings_text}
+
+Write the summary paragraph now:"""}]
+    )
+
+    return {
+        "bundle_id": bundle_id,
+        "summary": message.content[0].text,
+        "health_score": health_score,
+        "critical_count": critical_count,
+        "high_count": high_count,
+        "total_findings": len(findings),
+    }
+
+
+@router.get("/{bundle_id}/correlations")
+def get_finding_correlations(bundle_id: str, db: Session = Depends(get_db)):
+    """Get finding correlation graph data."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+
+    nodes = [{"id": f.id, "title": f.title, "severity": f.severity, "category": f.category or "unknown"} for f in findings]
+
+    edges = []
+    correlation_patterns = [
+        ("oom", "crash"), ("oom", "memory"), ("crash", "restart"),
+        ("memory", "pressure"), ("pvc", "storage"), ("pvc", "pending"),
+        ("node", "memory"), ("node", "disk"), ("storage", "mount"),
+    ]
+
+    for i, fa in enumerate(findings):
+        for j, fb in enumerate(findings):
+            if i >= j:
+                continue
+            title_a = fa.title.lower()
+            title_b = fb.title.lower()
+            for kw_a, kw_b in correlation_patterns:
+                if (kw_a in title_a and kw_b in title_b) or (kw_b in title_a and kw_a in title_b):
+                    edges.append({"source": fa.id, "target": fb.id, "type": "causal"})
+                    break
+            if fa.category and fb.category and fa.category == fb.category:
+                if not any(e["source"] == fa.id and e["target"] == fb.id for e in edges):
+                    edges.append({"source": fa.id, "target": fb.id, "type": "related"})
+
+    return {"bundle_id": bundle_id, "nodes": nodes, "edges": edges}
+
+
+@router.post("/{bundle_id}/export")
+def export_bundle_report(bundle_id: str, body: dict, db: Session = Depends(get_db)):
+    """Export bundle report as Slack or Jira format."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    export_type = body.get("type", "slack")
+
+    critical = [f for f in findings if f.severity == "critical"]
+    high = [f for f in findings if f.severity == "high"]
+    health_score = max(0, 100 - len(critical) * 25 - len(high) * 10 - len(findings) * 3)
+
+    if export_type == "slack":
+        blocks = [
+            f":rotating_light: *K8s Support Bundle Analysis — {bundle.filename}*",
+            f"*Cluster Health Score: {health_score}/100*",
+            f"Found *{len(findings)} issues* — {len(critical)} critical, {len(high)} high",
+            "",
+        ]
+        for f in critical[:3]:
+            blocks.append(f":red_circle: *[CRITICAL]* {f.title}")
+            blocks.append(f"  > {f.summary or ''}")
+            blocks.append(f"  > _Root cause: {f.root_cause or ''}_")
+            blocks.append("")
+        for f in high[:2]:
+            blocks.append(f":large_orange_circle: *[HIGH]* {f.title}")
+            blocks.append(f"  > {f.summary or ''}")
+            blocks.append("")
+        blocks.append(f"_Analyzed by K8s Bundle Analyzer · {len(findings)} total findings_")
+        return {"type": "slack", "content": "\n".join(blocks)}
+
+    else:
+        lines = [
+            f"# Incident Report: {bundle.filename}",
+            f"",
+            f"**Cluster Health Score:** {health_score}/100",
+            f"**Total Findings:** {len(findings)} ({len(critical)} critical, {len(high)} high)",
+            f"**Priority:** {'Critical' if critical else 'High' if high else 'Medium'}",
+            f"",
+            f"## Summary",
+            f"",
+            f"## Critical Issues",
+            f"",
+        ]
+        for f in critical:
+            lines += [
+                f"### {f.title}",
+                f"**Severity:** Critical",
+                f"**Description:** {f.summary or ''}",
+                f"**Root Cause:** {f.root_cause or ''}",
+                f"**Impact:** {f.impact or ''}",
+                f"**Recommended Actions:**",
+            ]
+            for action in (f.recommended_actions or []):
+                lines.append(f"- {action}")
+            lines.append(f"**Evidence:** `{_evidence_str(f.evidence)}`")
+            lines.append("")
+        return {"type": "jira", "content": "\n".join(lines)}

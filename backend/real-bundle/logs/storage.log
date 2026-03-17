@@ -1,0 +1,3 @@
+2026-03-16T10:01:00Z ERROR PVC database-pvc cannot be bound: no persistent volumes available
+2026-03-16T10:01:01Z WARN  StorageClass standard: no matching provisioner found
+2026-03-16T10:02:00Z ERROR pod/database waiting for volume to be mounted: timeout exceeded

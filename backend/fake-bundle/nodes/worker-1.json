@@ -1,0 +1,1 @@
+{"metadata":{"name":"worker-1"},"status":{"conditions":[{"type":"MemoryPressure","status":"True"},{"type":"DiskPressure","status":"False"},{"type":"Ready","status":"False"}],"allocatable":{"cpu":"4","memory":"8Gi"}}}
