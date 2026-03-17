@@ -38,6 +38,7 @@ class Bundle(Base):
     file_size = Column(BigInteger, default=0)
     file_path = Column(String(500), nullable=True)
     status = Column(String(50), default="uploaded")
+    previous_status = Column(String(50), nullable=True)  # set when archiving, used by restore
     upload_time = Column(DateTime, default=datetime.utcnow)
     analysis_start = Column(DateTime, nullable=True)
     analysis_end = Column(DateTime, nullable=True)

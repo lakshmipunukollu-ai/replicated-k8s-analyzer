@@ -18,6 +18,7 @@ export default function BundlesPage() {
   const [companyId, setCompanyId] = useState<string>('');
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>('');
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     fetch(API_COMPANIES).then((r) => r.json()).then((data) => setCompanies(Array.isArray(data) ? data : [])).catch(() => {});
@@ -64,13 +65,35 @@ export default function BundlesPage() {
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
+        <button
+          type="button"
+          onClick={() => setShowArchived((a) => !a)}
+          style={{
+            padding: '6px 14px',
+            border: `1px solid ${showArchived ? '#1e3a5f' : '#e2e8f0'}`,
+            borderRadius: '6px',
+            fontSize: '13px',
+            fontWeight: 600,
+            background: showArchived ? '#1e3a5f' : '#fff',
+            color: showArchived ? '#fff' : '#475569',
+            cursor: 'pointer',
+          }}
+        >
+          {showArchived ? 'Active bundles' : 'Archived'}
+        </button>
       </div>
-      <HealthTrendChart />
-      <FindingHeatmap />
-      <BundleList companyId={companyId || undefined} projectId={projectId || undefined} />
-      <div className="mt-8">
-        <BundleComparison />
-      </div>
+      {!showArchived && (
+        <>
+          <HealthTrendChart />
+          <FindingHeatmap />
+        </>
+      )}
+      <BundleList companyId={companyId || undefined} projectId={projectId || undefined} includeArchived={showArchived} />
+      {!showArchived && (
+        <div className="mt-8">
+          <BundleComparison />
+        </div>
+      )}
     </div>
   );
 }

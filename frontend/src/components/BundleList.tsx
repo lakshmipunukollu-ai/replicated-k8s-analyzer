@@ -49,40 +49,46 @@ function HealthBar({ findingCount }: { bundleId: string; findingCount: number })
   );
 }
 
-function BundleActions({ bundleId, onDelete, onArchive }: {
+function BundleActions({ bundleId, onDelete, onArchive, onRestore, onDeleteClick, isArchivedView }: {
   bundleId: string;
   onDelete: () => void;
   onArchive: () => void;
+  onRestore: () => void;
+  onDeleteClick: () => void;
+  isArchivedView: boolean;
 }) {
-  const [confirming, setConfirming] = useState(false);
-
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirming) { setConfirming(true); setTimeout(() => setConfirming(false), 3000); return; }
-    await fetch(`${API}/bundles/${bundleId}`, { method: 'DELETE' }).catch(() => {});
-    onDelete();
-  };
-
   const handleArchive = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await fetch(`${API}/bundles/${bundleId}/archive`, { method: 'POST' }).catch(() => {});
+    await fetch(`${API}/bundles/${bundleId}/archive`, { method: 'PATCH' }).catch(() => {});
     onArchive();
   };
+
+  const handleRestore = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await fetch(`${API}/bundles/${bundleId}/restore`, { method: 'PATCH' }).catch(() => {});
+    onRestore();
+  };
+
+  if (isArchivedView) {
+    return (
+      <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+        <button onClick={handleRestore} style={{ padding: '4px 10px', border: '1px solid #e2e8f0', borderRadius: '5px', background: '#fff', color: '#475569', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}>
+          Restore
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); onDeleteClick(); }} style={{ padding: '4px 10px', border: '1px solid #e2e8f0', borderRadius: '5px', background: '#dc2626', color: '#fff', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}>
+          Delete Forever
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
       <button onClick={handleArchive} style={{ padding: '4px 10px', border: '1px solid #e2e8f0', borderRadius: '5px', background: '#fff', color: '#64748b', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}>
         Archive
       </button>
-      <button onClick={handleDelete} style={{
-        padding: '4px 10px', border: '1px solid',
-        borderColor: confirming ? '#ef4444' : '#e2e8f0',
-        borderRadius: '5px',
-        background: confirming ? '#fef2f2' : '#fff',
-        color: confirming ? '#dc2626' : '#64748b',
-        fontSize: '11px', cursor: 'pointer', fontWeight: confirming ? 700 : 400,
-      }}>
-        {confirming ? 'Confirm?' : 'Delete'}
+      <button onClick={(e) => { e.stopPropagation(); onDeleteClick(); }} style={{ padding: '4px 10px', border: '1px solid #e2e8f0', borderRadius: '5px', background: '#fff', color: '#64748b', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}>
+        Delete
       </button>
     </div>
   );
@@ -108,43 +114,62 @@ function AiName({ bundleId, filename }: { bundleId: string; filename: string }) 
   );
 }
 
-export default function BundleList({ companyId, projectId }: { companyId?: string; projectId?: string } = {}) {
+export default function BundleList({ companyId, projectId, includeArchived }: { companyId?: string; projectId?: string; includeArchived?: boolean } = {}) {
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [deleteModalBundle, setDeleteModalBundle] = useState<Bundle | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     const params = new URLSearchParams();
     if (companyId) params.set('company_id', companyId);
     if (projectId) params.set('project_id', projectId);
+    if (includeArchived) params.set('include_archived', 'true');
     const qs = params.toString();
     const url = `${API}/bundles${qs ? `?${qs}` : ''}`;
-    console.log('[BundleList] Fetching bundles:', url);
     fetch(url)
-      .then(r => {
-        console.log('[BundleList] Response status:', r.status, r.statusText);
-        return r.json();
-      })
-      .then(d => {
-        console.log('[BundleList] Parsed data keys:', d ? Object.keys(d) : 'null', 'bundles count:', d?.bundles?.length ?? 0);
-        setBundles(d?.bundles ?? []);
-      })
-      .catch(err => {
-        console.warn('[BundleList] Fetch failed:', err);
-      })
+      .then(r => r.json())
+      .then(d => setBundles(d?.bundles ?? []))
+      .catch(() => setBundles([]))
       .finally(() => setLoading(false));
-  }, [companyId, projectId]);
+  }, [companyId, projectId, includeArchived]);
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center' as const, color: '#64748b' }}>Loading bundles...</div>;
   if (!bundles.length) return (
     <div style={{ textAlign: 'center' as const, padding: '60px', color: '#94a3b8' }}>
-      <div style={{ fontSize: '16px', marginBottom: '8px' }}>No bundles uploaded yet</div>
-      <div style={{ fontSize: '13px' }}>Upload a support bundle to get started</div>
+      <div style={{ fontSize: '16px', marginBottom: '8px' }}>{includeArchived ? 'No archived bundles' : 'No bundles uploaded yet'}</div>
+      <div style={{ fontSize: '13px' }}>{includeArchived ? 'Archive bundles from the main list to see them here.' : 'Upload a support bundle to get started'}</div>
     </div>
   );
 
+  const confirmDelete = async () => {
+    if (!deleteModalBundle) return;
+    setDeleting(true);
+    try {
+      await fetch(`${API}/bundles/${deleteModalBundle.id}`, { method: 'DELETE' });
+      setBundles(prev => prev.filter(b => b.id !== deleteModalBundle.id));
+      setDeleteModalBundle(null);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
+    <>
+      {deleteModalBundle && (
+        <div role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)' }} onClick={() => !deleting && setDeleteModalBundle(null)}>
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', maxWidth: '400px', width: '90%', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }} onClick={e => e.stopPropagation()}>
+            <h2 id="delete-modal-title" style={{ fontSize: '18px', fontWeight: 700, color: '#1e293b', margin: '0 0 12px 0' }}>Delete this bundle permanently?</h2>
+            <p style={{ fontSize: '14px', color: '#64748b', margin: '0 0 20px 0', lineHeight: 1.5 }}>This cannot be undone.</p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => !deleting && setDeleteModalBundle(null)} style={{ padding: '8px 16px', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#fff', color: '#475569', fontSize: '14px', fontWeight: 600, cursor: deleting ? 'not-allowed' : 'pointer' }}>Cancel</button>
+              <button type="button" onClick={confirmDelete} disabled={deleting} style={{ padding: '8px 16px', border: 'none', borderRadius: '8px', background: '#dc2626', color: '#fff', fontSize: '14px', fontWeight: 600, cursor: deleting ? 'not-allowed' : 'pointer' }}>{deleting ? 'Deleting…' : 'Delete Forever'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '8px' }}>
       {bundles.map(bundle => (
         <div key={bundle.id} onClick={() => router.push(`/bundles/${bundle.id}`)}
@@ -179,21 +204,25 @@ export default function BundleList({ companyId, projectId }: { companyId?: strin
             )}
             <span style={{
               fontSize: '12px', fontWeight: 600, padding: '3px 10px', borderRadius: '20px',
-              background: bundle.status === 'completed' ? '#f0fdf4' : bundle.status === 'analyzing' ? '#eff6ff' : '#fef2f2',
-              color: bundle.status === 'completed' ? '#15803d' : bundle.status === 'analyzing' ? '#1d4ed8' : '#dc2626',
+              background: bundle.status === 'completed' ? '#f0fdf4' : bundle.status === 'analyzing' ? '#eff6ff' : bundle.status === 'archived' ? '#f1f5f9' : '#fef2f2',
+              color: bundle.status === 'completed' ? '#15803d' : bundle.status === 'analyzing' ? '#1d4ed8' : bundle.status === 'archived' ? '#64748b' : '#dc2626',
             }}>
-              {bundle.status === 'completed' ? 'Completed' : bundle.status === 'analyzing' ? 'Analyzing...' : bundle.status}
+              {bundle.status === 'completed' ? 'Completed' : bundle.status === 'analyzing' ? 'Analyzing...' : bundle.status === 'archived' ? 'Archived' : bundle.status}
             </span>
             {hoveredId === bundle.id && (
               <BundleActions
                 bundleId={bundle.id}
                 onDelete={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
                 onArchive={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
+                onRestore={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
+                onDeleteClick={() => setDeleteModalBundle(bundle)}
+                isArchivedView={!!includeArchived}
               />
             )}
           </div>
         </div>
       ))}
     </div>
+    </>
   );
 }

@@ -171,14 +171,19 @@ def intake_bundle_from_url(
 def list_bundles(
     company_id: Optional[str] = None,
     project_id: Optional[str] = None,
+    include_archived: bool = False,
     db: Session = Depends(get_db)
 ):
-    """List all uploaded bundles, optionally filtered by company_id and/or project_id."""
+    """List bundles, optionally filtered by company_id, project_id. By default excludes archived; use include_archived=true to list only archived."""
     q = db.query(Bundle).order_by(Bundle.upload_time.desc())
     if company_id:
         q = q.filter(Bundle.company_id == company_id)
     if project_id:
         q = q.filter(Bundle.project_id == project_id)
+    if include_archived:
+        q = q.filter(Bundle.status == "archived")
+    else:
+        q = q.filter(Bundle.status != "archived")
     bundles = q.all()
 
     bundle_list = []
@@ -213,6 +218,45 @@ def list_bundles(
         ))
 
     return BundleListResponse(bundles=bundle_list)
+
+
+@router.patch("/{bundle_id}/archive")
+def archive_bundle(bundle_id: str, db: Session = Depends(get_db)):
+    """Set bundle status to archived and store previous status for restore."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    bundle.previous_status = bundle.status
+    bundle.status = "archived"
+    db.commit()
+    db.refresh(bundle)
+    return {"id": bundle.id, "status": bundle.status, "previous_status": bundle.previous_status}
+
+
+@router.patch("/{bundle_id}/restore")
+def restore_bundle(bundle_id: str, db: Session = Depends(get_db)):
+    """Restore bundle status from previous_status (e.g. after unarchiving)."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    if bundle.status != "archived":
+        raise HTTPException(status_code=400, detail="Bundle is not archived")
+    bundle.status = bundle.previous_status or "uploaded"
+    bundle.previous_status = None
+    db.commit()
+    db.refresh(bundle)
+    return {"id": bundle.id, "status": bundle.status}
+
+
+@router.delete("/{bundle_id}")
+def delete_bundle(bundle_id: str, db: Session = Depends(get_db)):
+    """Permanently delete a bundle and its findings."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    db.delete(bundle)
+    db.commit()
+    return {"deleted": True, "id": bundle_id}
 
 
 @router.get("/search")
