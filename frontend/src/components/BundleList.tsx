@@ -12,9 +12,18 @@ const STATUS_COLORS: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
 };
 
-function formatTime(ts: string) {
-  return new Date(ts).toLocaleString();
-}
+const formatTime = (ts: string) => {
+  const date = new Date(ts.endsWith('Z') ? ts : ts + 'Z');
+  return date.toLocaleString('en-US', {
+    month: 'numeric',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+  });
+};
 
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;

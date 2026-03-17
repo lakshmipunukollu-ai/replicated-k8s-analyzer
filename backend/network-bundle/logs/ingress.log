@@ -1,0 +1,5 @@
+2026-03-17T08:00:00Z ERROR ingress-nginx: dial tcp 10.0.0.5:8080: connect: connection refused
+2026-03-17T08:00:01Z ERROR ingress-nginx: upstream timed out (110: Connection timed out)
+2026-03-17T08:00:05Z ERROR ingress-nginx: no live upstreams while connecting to upstream
+2026-03-17T08:01:00Z WARN  ingress-nginx: upstream response time 30.5s exceeds threshold
+2026-03-17T08:02:00Z ERROR ingress-nginx: SSL certificate expires in 3 days

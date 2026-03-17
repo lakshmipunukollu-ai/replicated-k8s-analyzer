@@ -1,0 +1,4 @@
+2026-03-17T07:55:00Z WARN  etcd: heartbeat interval too high 500ms should be <= 100ms
+2026-03-17T07:57:00Z ERROR etcd: failed to send out heartbeat on time
+2026-03-17T07:58:00Z ERROR etcd: the clock difference against peer is too high
+2026-03-17T08:00:00Z CRIT  etcd: lost leader election, restarting

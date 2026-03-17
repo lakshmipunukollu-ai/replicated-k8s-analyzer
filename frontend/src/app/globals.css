@@ -25,3 +25,17 @@ body {
     text-wrap: balance;
   }
 }
+
+input, select, textarea {
+  color: #1e293b !important;
+  background: #ffffff !important;
+}
+
+input::placeholder, textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+select option {
+  color: #1e293b;
+  background: #ffffff;
+}

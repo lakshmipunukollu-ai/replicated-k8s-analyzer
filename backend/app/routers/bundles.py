@@ -13,7 +13,6 @@ from app.schemas import (
     BundleResponse, BundleListResponse, ReportResponse,
     ReportSummary, FindingResponse, AnalyzeResponse
 )
-from app.services.analyzer import BundleAnalyzer
 from app.services.chat_service import BundleChatService
 from app.services.timeline_service import TimelineService
 from app.services.playbook_service import PlaybookService
@@ -137,43 +136,39 @@ def get_bundle(bundle_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{bundle_id}/analyze", response_model=AnalyzeResponse)
-async def analyze_bundle(
+def analyze_bundle(
     bundle_id: str,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Trigger analysis for an uploaded bundle."""
+    """Trigger AI analysis of a support bundle."""
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
-
     if bundle.status not in ("uploaded", "failed"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Bundle is already {bundle.status}"
-        )
-
-    # Start analysis in background
-    background_tasks.add_task(_run_analysis, bundle_id, bundle.file_path)
+        raise HTTPException(status_code=400, detail=f"Bundle is already {bundle.status}")
 
     bundle.status = "analyzing"
+    bundle.analysis_start = datetime.utcnow()
     db.commit()
 
-    return AnalyzeResponse(
-        bundle_id=bundle_id,
-        status="analyzing",
-        message="Analysis started"
-    )
+    background_tasks.add_task(run_analysis, bundle_id)
+
+    return AnalyzeResponse(bundle_id=bundle_id, status="analyzing", message="Analysis started")
 
 
-async def _run_analysis(bundle_id: str, file_path: str):
-    """Run analysis in background."""
+def run_analysis(bundle_id: str):
+    """Background task that actually runs the analysis."""
     from app.database import SessionLocal
+    from app.services.analyzer import BundleAnalyzer
 
     db = SessionLocal()
     try:
+        bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+        if not bundle:
+            return
         analyzer = BundleAnalyzer()
-        await analyzer.analyze(bundle_id, file_path, db)
+        asyncio.run(analyzer.analyze(bundle_id, bundle.file_path, db))
     except Exception as e:
         bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
         if bundle:
@@ -182,6 +177,122 @@ async def _run_analysis(bundle_id: str, file_path: str):
             db.commit()
     finally:
         db.close()
+
+
+@router.get("/{bundle_id}/analyze/stream")
+def stream_analysis(bundle_id: str, db: Session = Depends(get_db)):
+    """Stream analysis findings as SSE events as they are discovered."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    def generate():
+        from app.services.extractor import BundleExtractor
+        from app.services.signal_extractor import SignalExtractor
+
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        extractor = BundleExtractor()
+        signal_extractor = SignalExtractor()
+
+        bundle.status = "analyzing"
+        bundle.analysis_start = datetime.utcnow()
+        db.commit()
+
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting bundle contents...'})}\n\n"
+
+        bundle_data = extractor.extract(bundle.file_path)
+        signals = signal_extractor.extract(bundle_data["files"])
+        total_files = bundle_data["total_files"]
+        yield f"data: {json.dumps({'type': 'status', 'message': f'Found {total_files} files — scanning for failure patterns...'})}\n\n"
+
+        log_content = ""
+        for log_path in bundle_data["files"]["logs"][:5]:
+            content = extractor.read_file(log_path, max_lines=200)
+            if content:
+                log_content += f"\n--- {log_path} ---\n{content}"
+
+        status_content = ""
+        for status_path in bundle_data["files"]["status"][:3]:
+            content = extractor.read_file(status_path, max_lines=100)
+            if content:
+                status_content += f"\n--- {status_path} ---\n{content}"
+
+        yield f"data: {json.dumps({'type': 'status', 'message': 'Running AI analysis — findings will appear as discovered...'})}\n\n"
+
+        prompt = f"""You are an expert Kubernetes SRE analyzing a support bundle. Analyze this data and identify issues.
+
+SIGNALS DETECTED:
+{json.dumps(signals, indent=2)}
+
+LOG EXCERPTS:
+{log_content[:3000]}
+
+STATUS DATA:
+{status_content[:2000]}
+
+Output EXACTLY this JSON format for each finding, one per line, with NO other text:
+{{"title":"...","severity":"critical|high|medium|low","description":"...","root_cause":"...","impact":"...","recommended_actions":["..."],"evidence":"...","confidence":0.95,"categories":["resource"]}}
+
+Output 3-6 findings. Each finding on its own line. Nothing else."""
+
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}]
+            ) as stream:
+                buffer = ""
+                for text in stream.text_stream:
+                    buffer += text
+                    lines = buffer.split("\n")
+                    buffer = lines[-1]
+                    for line in lines[:-1]:
+                        line = line.strip()
+                        if line.startswith("{") and line.endswith("}"):
+                            try:
+                                finding_data = json.loads(line)
+                                categories = finding_data.get("categories")
+                                category = (categories[0] if isinstance(categories, list) and categories else "other")
+                                evidence_val = finding_data.get("evidence", "")
+                                evidence_list = [evidence_val] if isinstance(evidence_val, str) else (evidence_val if isinstance(evidence_val, list) else [])
+
+                                finding = Finding(
+                                    id=generate_uuid(),
+                                    bundle_id=bundle_id,
+                                    title=finding_data.get("title", "Unknown"),
+                                    severity=finding_data.get("severity", "medium"),
+                                    category=category,
+                                    summary=finding_data.get("description") or finding_data.get("summary", ""),
+                                    root_cause=finding_data.get("root_cause", ""),
+                                    impact=finding_data.get("impact", ""),
+                                    recommended_actions=finding_data.get("recommended_actions", []),
+                                    evidence=evidence_list,
+                                    confidence=float(finding_data.get("confidence", 0.8)),
+                                    source="llm",
+                                )
+                                db.add(finding)
+                                db.commit()
+                                yield f"data: {json.dumps({'type': 'finding', 'finding': finding_data})}\n\n"
+                            except (json.JSONDecodeError, TypeError, ValueError):
+                                pass
+
+            bundle.status = "completed"
+            bundle.analysis_end = datetime.utcnow()
+            db.commit()
+        except Exception as e:
+            bundle.status = "failed"
+            bundle.error_message = str(e)
+            db.commit()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            return
+
+        findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+        yield f"data: {json.dumps({'type': 'complete', 'bundle_id': bundle_id, 'total': len(findings)})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @router.get("/{bundle_id}/status")
@@ -374,41 +485,55 @@ def get_remediation_playbook(
 
 @router.get("/{bundle_id}/summary")
 def get_bundle_summary(bundle_id: str, db: Session = Depends(get_db)):
-    """Get AI-generated natural language summary of the bundle."""
+    """Get bundle summary (cached on Bundle if available, else generate via Claude and cache)."""
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
     findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
 
-    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-    findings_text = "\n".join([
-        f"- [{f.severity.upper()}] {f.title}: {f.summary or ''}. Root cause: {f.root_cause or ''}"
-        for f in findings
-    ])
-
     critical_count = len([f for f in findings if f.severity == 'critical'])
     high_count = len([f for f in findings if f.severity == 'high'])
-
     health_score = max(0, 100 - (critical_count * 25) - (high_count * 10) - (len(findings) * 3))
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=300,
-        messages=[{"role": "user", "content": f"""You are a senior SRE writing a one-paragraph incident summary for a Kubernetes cluster.
-Write exactly ONE paragraph (3-5 sentences) in plain English, written as if a senior engineer is briefing their team.
-Be specific about what's broken, why, and what the impact is. Do not use bullet points or headers.
+    if bundle.summary:
+        return {
+            "bundle_id": bundle_id,
+            "summary": bundle.summary,
+            "health_score": health_score,
+            "critical_count": critical_count,
+            "high_count": high_count,
+            "total_findings": len(findings),
+        }
+
+    if not findings:
+        summary_text = "No findings were detected in this bundle. The cluster appears to be operating normally, or the bundle may not contain sufficient diagnostic data for analysis."
+    else:
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        findings_text = "\n".join([
+            f"- [{f.severity.upper()}] {f.title}: {f.summary or ''}. Root cause: {f.root_cause or ''}"
+            for f in findings
+        ])
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=300,
+            messages=[{"role": "user", "content": f"""You are a senior SRE writing a one-paragraph incident summary.
+Write exactly ONE paragraph (3-5 sentences) in plain English like a senior engineer briefing their team.
+Be specific about what's broken, why, and the impact. No bullet points or headers.
 
 Bundle: {bundle.filename}
 Findings ({len(findings)} total, {critical_count} critical, {high_count} high):
 {findings_text}
 
 Write the summary paragraph now:"""}]
-    )
+        )
+        summary_text = message.content[0].text
+
+    bundle.summary = summary_text
+    db.commit()
 
     return {
         "bundle_id": bundle_id,
-        "summary": message.content[0].text,
+        "summary": summary_text,
         "health_score": health_score,
         "critical_count": critical_count,
         "high_count": high_count,

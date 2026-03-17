@@ -1,0 +1,5 @@
+{"items":[
+  {"metadata":{"name":"coredns-abc","namespace":"kube-system"},"status":{"phase":"CrashLoopBackOff","containerStatuses":[{"name":"coredns","restartCount":12,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}},
+  {"metadata":{"name":"ingress-controller","namespace":"ingress-nginx"},"status":{"phase":"Running","containerStatuses":[{"name":"controller","restartCount":3}]}},
+  {"metadata":{"name":"etcd-master","namespace":"kube-system"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}}
+]}

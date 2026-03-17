@@ -8,16 +8,23 @@ const SEV_COLOR: Record<string, string> = {
   critical: '#ef4444', high: '#f59e0b', medium: '#6366f1', low: '#10b981', info: '#94a3b8'
 };
 
-export default function CorrelationGraph({ bundleId }: { bundleId: string }) {
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
-  const [loading, setLoading] = useState(true);
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+
+export default function CorrelationGraph({ bundleId, nodes: propNodes, edges: propEdges }: { bundleId: string; nodes?: Node[]; edges?: Edge[] }) {
+  const [nodes, setNodes] = useState<Node[]>(propNodes ?? []);
+  const [edges, setEdges] = useState<Edge[]>(propEdges ?? []);
+  const [loading, setLoading] = useState(propNodes === undefined);
   const [selected, setSelected] = useState<Node | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const posRef = useRef<Record<string, { x: number; y: number }>>({});
 
   useEffect(() => {
-    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+    if (propNodes !== undefined) {
+      setNodes(propNodes);
+      setEdges(propEdges ?? []);
+      setLoading(false);
+      return;
+    }
     fetch(`${API}/bundles/${bundleId}/correlations`)
       .then(r => r.json())
       .then(d => {
@@ -26,7 +33,7 @@ export default function CorrelationGraph({ bundleId }: { bundleId: string }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [bundleId]);
+  }, [bundleId, propNodes, propEdges]);
 
   useEffect(() => {
     if (!nodes.length || !canvasRef.current) return;

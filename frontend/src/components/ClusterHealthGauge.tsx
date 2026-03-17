@@ -9,29 +9,44 @@ interface SummaryData {
   total_findings: number;
 }
 
-export default function ClusterHealthGauge({ bundleId }: { bundleId: string }) {
-  const [data, setData] = useState<SummaryData | null>(null);
-  const [loading, setLoading] = useState(true);
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+
+export default function ClusterHealthGauge({ bundleId, data: propData }: { bundleId: string; data?: SummaryData | null }) {
+  const [data, setData] = useState<SummaryData | null>(propData ?? null);
+  const [loading, setLoading] = useState(!propData);
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
-    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+    if (propData) {
+      setData(propData);
+      setLoading(false);
+      return;
+    }
     fetch(`${API}/bundles/${bundleId}/summary`)
       .then(r => r.json())
       .then(d => {
         setData(d);
         setLoading(false);
-        let start = 0;
-        const target = d.health_score;
-        const step = target / 60;
-        const interval = setInterval(() => {
-          start += step;
-          if (start >= target) { setAnimatedScore(target); clearInterval(interval); }
-          else setAnimatedScore(Math.round(start));
-        }, 16);
       })
       .catch(() => setLoading(false));
-  }, [bundleId]);
+  }, [bundleId, propData]);
+
+  useEffect(() => {
+    if (!data) return;
+    let start = 0;
+    const target = data.health_score;
+    const step = target / 60;
+    const interval = setInterval(() => {
+      start += step;
+      if (start >= target) {
+        setAnimatedScore(target);
+        clearInterval(interval);
+      } else {
+        setAnimatedScore(Math.round(start));
+      }
+    }, 16);
+    return () => clearInterval(interval);
+  }, [data]);
 
   const getColor = (score: number) => {
     if (score >= 70) return '#10b981';
@@ -57,7 +72,7 @@ export default function ClusterHealthGauge({ bundleId }: { bundleId: string }) {
   const color = getColor(data.health_score);
   const r = 54;
   const circ = 2 * Math.PI * r;
-  const dashOffset = circ - (score / 100) * circ;
+  const displayDash = score === 0 ? circ : (score / 100) * circ;
 
   return (
     <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '20px 24px', marginBottom: '20px' }}>
@@ -66,8 +81,8 @@ export default function ClusterHealthGauge({ bundleId }: { bundleId: string }) {
         <div style={{ textAlign: 'center' as const, flexShrink: 0 }}>
           <svg width="140" height="140" viewBox="0 0 140 140">
             <circle cx="70" cy="70" r={r} fill="none" stroke="#f1f5f9" strokeWidth="12" />
-            <circle cx="70" cy="70" r={r} fill="none" stroke={color} strokeWidth="12"
-              strokeDasharray={circ} strokeDashoffset={dashOffset}
+            <circle cx="70" cy="70" r={r} fill="none" stroke={score === 0 ? '#ef4444' : color} strokeWidth="12"
+              strokeDasharray={`${displayDash} ${circ}`}
               strokeLinecap="round"
               transform="rotate(-90 70 70)"
               style={{ transition: 'stroke-dashoffset 0.05s linear' }}

@@ -17,20 +17,68 @@ export default function BundleDetailPage() {
   const id = params?.id as string;
   const [bundle, setBundle] = useState<any>(null);
   const [findings, setFindings] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [timeline, setTimeline] = useState<any[]>([]);
+  const [correlations, setCorrelations] = useState<any>({ nodes: [], edges: [] });
+  const [playbook, setPlaybook] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('Overview');
 
   useEffect(() => {
     if (!id) return;
+
     Promise.all([
       fetch(`${API}/bundles/${id}`).then(r => r.json()),
       fetch(`${API}/bundles/${id}/report`).then(r => r.json()),
-    ]).then(([b, report]) => {
+      fetch(`${API}/bundles/${id}/timeline`).then(r => r.json()).catch(() => ({ events: [] })),
+      fetch(`${API}/bundles/${id}/correlations`).then(r => r.json()).catch(() => ({ nodes: [], edges: [] })),
+      fetch(`${API}/bundles/${id}/playbook`).then(r => r.json()).catch(() => ({ playbook: [] })),
+    ]).then(([b, report, tl, corr, pb]) => {
+      if (!b || b.detail === 'Bundle not found') {
+        setLoading(false);
+        return;
+      }
       setBundle(b);
       setFindings(report.findings || []);
+      setTimeline(tl?.events || []);
+      setCorrelations({ nodes: corr?.nodes || [], edges: corr?.edges || [] });
+      setPlaybook(pb?.playbook || []);
       setLoading(false);
+
+      fetch(`${API}/bundles/${id}/summary`)
+        .then(r => r.json())
+        .then(sum => setSummary(sum))
+        .catch(() => {});
     }).catch(() => setLoading(false));
   }, [id]);
+
+  // Poll every 3 seconds while analyzing
+  useEffect(() => {
+    if (!bundle || bundle.status !== 'analyzing') return;
+    const interval = setInterval(async () => {
+      try {
+        const [b, report] = await Promise.all([
+          fetch(`${API}/bundles/${id}`).then(r => r.json()),
+          fetch(`${API}/bundles/${id}/report`).then(r => r.json()),
+        ]);
+        if (b.status === 'completed' && (report.findings || []).length > 0) {
+          setBundle(b);
+          setFindings(report.findings || []);
+          clearInterval(interval);
+          Promise.all([
+            fetch(`${API}/bundles/${id}/timeline`).then(r => r.json()).catch(() => ({ events: [] })),
+            fetch(`${API}/bundles/${id}/correlations`).then(r => r.json()).catch(() => ({ nodes: [], edges: [] })),
+            fetch(`${API}/bundles/${id}/playbook`).then(r => r.json()).catch(() => ({ playbook: [] })),
+          ]).then(([tl, corr, pb]) => {
+            setTimeline(tl?.events || []);
+            setCorrelations({ nodes: corr?.nodes || [], edges: corr?.edges || [] });
+            setPlaybook(pb?.playbook || []);
+          });
+        }
+      } catch { }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [bundle?.status, id]);
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center' as const, color: '#64748b' }}>Loading bundle...</div>;
   if (!bundle) return <div style={{ padding: '40px', textAlign: 'center' as const, color: '#ef4444' }}>Bundle not found</div>;
@@ -56,6 +104,12 @@ export default function BundleDetailPage() {
         <div style={{ fontSize: '13px', color: '#64748b' }}>Status: {bundle.status} · {findings.length} findings</div>
       </div>
 
+      {findings.length === 0 && !loading && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '8px', padding: '12px 16px', marginBottom: '16px', fontSize: '13px', color: '#92400e' }}>
+          ⟳ Analyzing bundle — findings will appear in ~15 seconds. Page will reload automatically.
+        </div>
+      )}
+
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '2px', marginBottom: '20px', borderBottom: '1px solid #e2e8f0', overflowX: 'auto' as const }}>
         {TABS.map(tab => (
@@ -72,7 +126,7 @@ export default function BundleDetailPage() {
       {/* Overview tab */}
       {activeTab === 'Overview' && (
         <div>
-          <ClusterHealthGauge bundleId={id} />
+          <ClusterHealthGauge bundleId={id} data={summary} />
           <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px 18px', marginBottom: '16px' }}>
             <div style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '10px' }}>By severity</div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' as const }}>
@@ -118,9 +172,9 @@ export default function BundleDetailPage() {
         </div>
       )}
 
-      {activeTab === 'Timeline' && <IncidentTimeline bundleId={id} />}
-      {activeTab === 'Correlations' && <CorrelationGraph bundleId={id} />}
-      {activeTab === 'Playbook' && <RemediationPlaybook bundleId={id} />}
+      {activeTab === 'Timeline' && <IncidentTimeline bundleId={id} events={timeline} />}
+      {activeTab === 'Correlations' && <CorrelationGraph bundleId={id} nodes={correlations.nodes} edges={correlations.edges} />}
+      {activeTab === 'Playbook' && <RemediationPlaybook bundleId={id} playbook={playbook} />}
       {activeTab === 'Export' && <ExportReport bundleId={id} filename={bundle.filename} />}
       {activeTab === 'Ask AI' && <BundleChat bundleId={id} />}
     </div>

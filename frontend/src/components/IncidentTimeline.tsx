@@ -11,17 +11,26 @@ interface TimelineEvent {
   evidence: string;
 }
 
-export default function IncidentTimeline({ bundleId }: { bundleId: string }) {
-  const [events, setEvents] = useState<TimelineEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+
+export default function IncidentTimeline({ bundleId, events: propEvents }: { bundleId: string; events?: TimelineEvent[] }) {
+  const [events, setEvents] = useState<TimelineEvent[]>(propEvents ?? []);
+  const [loading, setLoading] = useState(!propEvents?.length);
 
   useEffect(() => {
-    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+    if (propEvents !== undefined) {
+      setEvents(propEvents);
+      setLoading(false);
+      return;
+    }
     fetch(`${API}/bundles/${bundleId}/timeline`)
       .then(r => r.json())
-      .then(d => { setEvents(d.events || []); setLoading(false); })
+      .then(d => {
+        setEvents(d.events || []);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [bundleId]);
+  }, [bundleId, propEvents]);
 
   if (loading) return <div style={{ padding: '20px', color: '#64748b', fontSize: '13px' }}>Building timeline...</div>;
   if (!events.length) return <div style={{ padding: '20px', color: '#94a3b8', fontSize: '13px' }}>No timeline events available</div>;

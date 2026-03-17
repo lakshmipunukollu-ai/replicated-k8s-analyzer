@@ -4,18 +4,27 @@ import { useEffect, useState } from 'react';
 interface Step { step: number; label: string; type: string; cmd: string; color: string; bg: string; text_color: string; }
 interface Playbook { finding_title: string; severity: string; steps: Step[]; }
 
-export default function RemediationPlaybook({ bundleId }: { bundleId: string }) {
-  const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
-  const [loading, setLoading] = useState(true);
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+
+export default function RemediationPlaybook({ bundleId, playbook: propPlaybook }: { bundleId: string; playbook?: Playbook[] }) {
+  const [playbooks, setPlaybooks] = useState<Playbook[]>(propPlaybook ?? []);
+  const [loading, setLoading] = useState(propPlaybook === undefined);
   const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
-    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+    if (propPlaybook !== undefined) {
+      setPlaybooks(propPlaybook);
+      setLoading(false);
+      return;
+    }
     fetch(`${API}/bundles/${bundleId}/playbook`)
       .then(r => r.json())
-      .then(d => { setPlaybooks(d.playbook || []); setLoading(false); })
+      .then(d => {
+        setPlaybooks(d.playbook || []);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
-  }, [bundleId]);
+  }, [bundleId, propPlaybook]);
 
   const copy = (cmd: string) => {
     navigator.clipboard.writeText(cmd);

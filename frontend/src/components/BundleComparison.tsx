@@ -20,7 +20,10 @@ export default function BundleComparison() {
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
 
   useEffect(() => {
-    fetch(`${API}/bundles`).then(r => r.json()).then(d => setBundles(d.bundles || []));
+    fetch(`${API}/bundles`)
+      .then(r => r.json())
+      .then(d => setBundles(d.bundles || []))
+      .catch(() => setBundles([]));
   }, []);
 
   const compare = async () => {
@@ -33,7 +36,11 @@ export default function BundleComparison() {
         body: JSON.stringify({ bundle_a_id: selectedA, bundle_b_id: selectedB }),
       });
       setResult(await res.json());
-    } finally { setLoading(false); }
+    } catch {
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -46,16 +53,16 @@ export default function BundleComparison() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '10px', marginBottom: '16px', alignItems: 'end' }}>
         <div>
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Baseline bundle</div>
-          <select value={selectedA} onChange={e => setSelectedA(e.target.value)} style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '13px', background: '#fff' }}>
-            <option value="">Select bundle...</option>
-            {bundles.map(b => <option key={b.id} value={b.id}>{b.filename} ({b.finding_count} findings)</option>)}
+          <select value={selectedA} onChange={e => setSelectedA(e.target.value)} style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '13px', background: '#fff', color: '#1e293b', fontWeight: 500 }}>
+            <option value="" style={{ color: '#94a3b8' }}>Select bundle...</option>
+            {bundles.map(b => <option key={b.id} value={b.id} style={{ color: '#1e293b' }}>{b.filename} ({b.finding_count} findings)</option>)}
           </select>
         </div>
         <div>
           <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Incident bundle</div>
-          <select value={selectedB} onChange={e => setSelectedB(e.target.value)} style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '13px', background: '#fff' }}>
-            <option value="">Select bundle...</option>
-            {bundles.map(b => <option key={b.id} value={b.id}>{b.filename} ({b.finding_count} findings)</option>)}
+          <select value={selectedB} onChange={e => setSelectedB(e.target.value)} style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '13px', background: '#fff', color: '#1e293b', fontWeight: 500 }}>
+            <option value="" style={{ color: '#94a3b8' }}>Select bundle...</option>
+            {bundles.map(b => <option key={b.id} value={b.id} style={{ color: '#1e293b' }}>{b.filename} ({b.finding_count} findings)</option>)}
           </select>
         </div>
         <button onClick={compare} disabled={!selectedA || !selectedB || selectedA === selectedB || loading}

@@ -85,7 +85,7 @@ export default function BundleChat({ bundleId }: { bundleId: string }) {
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && send()}
           placeholder="Ask about this bundle..."
-          style={{ flex: 1, padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '13px', outline: 'none' }}
+          style={{ flex: 1, padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '13px', outline: 'none', color: '#1e293b', background: '#fff' }}
         />
         <button onClick={send} disabled={loading} style={{ padding: '8px 18px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
           Ask

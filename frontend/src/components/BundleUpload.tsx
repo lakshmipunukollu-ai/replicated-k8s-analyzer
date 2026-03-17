@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { uploadBundle, triggerAnalysis } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
 
 export default function BundleUpload() {
   const [uploading, setUploading] = useState(false);
@@ -20,12 +21,23 @@ export default function BundleUpload() {
     setError(null);
 
     try {
-      const bundle = await uploadBundle(file);
-      await triggerAnalysis(bundle.id);
-      router.push(`/bundles/${bundle.id}`);
-    } catch (err) {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(`${API}/bundles/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      const bundleId = data.id;
+
+      // Auto-trigger analysis
+      await fetch(`${API}/bundles/${bundleId}/analyze`, { method: 'POST' });
+
+      // Redirect to bundle detail
+      router.push(`/bundles/${bundleId}`);
+    } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
       setUploading(false);
     }
   }, [router]);
