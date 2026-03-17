@@ -13,6 +13,14 @@ class BundleResponse(BaseModel):
     analysis_end: Optional[datetime] = None
     error_message: Optional[str] = None
     finding_count: int = 0
+    company_id: Optional[str] = None
+    project_id: Optional[str] = None
+    company_name: Optional[str] = None
+    project_name: Optional[str] = None
+    triage_status: Optional[str] = None
+    assigned_to: Optional[str] = None
+    assigned_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -72,3 +80,8 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     version: str
+
+
+class TriageUpdate(BaseModel):
+    triage_status: Optional[str] = None
+    assigned_to: Optional[str] = None

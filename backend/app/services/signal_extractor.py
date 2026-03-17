@@ -1,230 +1,215 @@
 """
-SignalExtractor - Pulls structured signals from bundle contents.
-Deterministic extraction, no LLM cost.
+SignalExtractor - Extracts failure signals from indexed bundle files.
+Handles both generic bundles and Replicated Troubleshoot bundle format.
 """
-import re
 import json
 import os
+import re
 from typing import Dict, List, Any
 
 
 class SignalExtractor:
-    """Extract structured K8s signals from support bundle files."""
+    """Extracts structured signals from K8s support bundle files."""
 
-    # Patterns for detecting K8s issues in logs and manifests
-    OOMKILL_PATTERNS = [
-        re.compile(r"OOMKilled", re.IGNORECASE),
-        re.compile(r"Out of memory", re.IGNORECASE),
-        re.compile(r"oom-kill", re.IGNORECASE),
-        re.compile(r"memory cgroup out of memory", re.IGNORECASE),
+    CRITICAL_PATTERNS = [
+        (r'OOMKill|OOM.?Kill|oom.?kill|exceeded memory limit|container.*OOM', 'oomkill'),
+        (r'CrashLoopBackOff|CrashLoop|crash.loop', 'crashloop'),
+        (r'ImagePullBackOff|ErrImagePull|Failed to pull image|image.*not found', 'imagepull'),
+        (r'MemoryPressure|memory.pressure|kubelet has memory pressure', 'memorypressure'),
+        (r'DiskPressure|disk.pressure|no space left', 'diskpressure'),
+        (r'etcd.*unavailable|failed to send.*heartbeat|lost leader election', 'etcd'),
+        (r'SERVFAIL|coredns.*fail|dns.*fail|failed to list.*Service', 'dns'),
+        (r'PVC.*cannot be bound|no persistent volumes|ProvisioningFailed|unbound.*PersistentVolumeClaim', 'pvc'),
+        (r'BackOff|back.off restarting|restart.*failed', 'backoff'),
+        (r'Evicted|evict|node.*low on resource', 'eviction'),
+        (r'NotReady|not.ready|node.*NotReady', 'notready'),
+        (r'Pending.*unbound|0/[0-9]+ nodes available', 'scheduling'),
     ]
 
-    CRASHLOOP_PATTERNS = [
-        re.compile(r"CrashLoopBackOff", re.IGNORECASE),
-        re.compile(r"Back-off restarting failed container", re.IGNORECASE),
-    ]
-
-    IMAGE_PULL_PATTERNS = [
-        re.compile(r"ImagePullBackOff", re.IGNORECASE),
-        re.compile(r"ErrImagePull", re.IGNORECASE),
-        re.compile(r"Failed to pull image", re.IGNORECASE),
-    ]
-
-    NODE_PRESSURE_PATTERNS = [
-        re.compile(r"DiskPressure", re.IGNORECASE),
-        re.compile(r"MemoryPressure", re.IGNORECASE),
-        re.compile(r"PIDPressure", re.IGNORECASE),
-        re.compile(r"NodeNotReady", re.IGNORECASE),
-        re.compile(r"condition.*NotReady", re.IGNORECASE),
-    ]
-
-    PVC_PATTERNS = [
-        re.compile(r"PersistentVolumeClaim.*Pending", re.IGNORECASE),
-        re.compile(r"no persistent volumes available", re.IGNORECASE),
-        re.compile(r"storageclass.*not found", re.IGNORECASE),
-    ]
-
-    DNS_PATTERNS = [
-        re.compile(r"dns.*resolution.*fail", re.IGNORECASE),
-        re.compile(r"could not resolve", re.IGNORECASE),
-        re.compile(r"coredns.*crash", re.IGNORECASE),
-        re.compile(r"nxdomain", re.IGNORECASE),
-    ]
-
-    RBAC_PATTERNS = [
-        re.compile(r"forbidden.*rbac", re.IGNORECASE),
-        re.compile(r"cannot.*(?:get|list|create|delete|update).*(?:pods|deployments|services)", re.IGNORECASE),
-        re.compile(r"Unauthorized", re.IGNORECASE),
-    ]
-
-    def extract(self, file_index: Dict[str, List[str]]) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Extract all structured signals from indexed bundle files.
-
-        Args:
-            file_index: Dict mapping file types to file paths
-
-        Returns:
-            Dict of signal categories to lists of signal objects
-        """
+    def extract(self, bundle_data: Dict) -> Dict[str, Any]:
+        """Extract signals from all bundle files."""
         signals = {
-            "failed_pods": [],
-            "oom_kills": [],
-            "crashloop_backoffs": [],
-            "image_pull_errors": [],
-            "pending_pvcs": [],
-            "node_conditions": [],
-            "recent_events": [],
-            "resource_pressure": [],
-            "dns_issues": [],
-            "rbac_issues": [],
+            "oomkill": [],
+            "crashloop": [],
+            "imagepull": [],
+            "memorypressure": [],
+            "diskpressure": [],
+            "etcd": [],
+            "dns": [],
+            "pvc": [],
+            "backoff": [],
+            "eviction": [],
+            "notready": [],
+            "scheduling": [],
+            "pod_statuses": [],
+            "node_statuses": [],
+            "events": [],
+            "raw_signals": [],
         }
 
-        # Scan log files
-        for log_file in file_index.get("logs", []):
-            self._scan_log_file(log_file, signals)
+        # Process log files
+        for log_path in bundle_data["files"]["logs"][:20]:
+            self._extract_from_log(log_path, signals, bundle_data.get("extractor"))
 
-        # Scan manifests for pod status
-        for manifest_file in file_index.get("manifests", []):
-            self._scan_manifest(manifest_file, signals)
+        # Process event files
+        for event_path in bundle_data["files"].get("events", [])[:5]:
+            self._extract_from_events(event_path, signals, bundle_data.get("extractor"))
 
-        # Scan JSON status files
-        for status_file in file_index.get("status", []):
-            self._scan_status_file(status_file, signals)
+        # Process status/JSON files
+        for status_path in bundle_data["files"]["status"][:20]:
+            self._extract_from_status(status_path, signals, bundle_data.get("extractor"))
 
         return signals
 
-    def _scan_log_file(self, file_path: str, signals: Dict):
-        """Scan a log file for known signal patterns."""
+    def _extract_from_log(self, path: str, signals: Dict, extractor=None):
         try:
-            with open(file_path, "r", errors="replace") as f:
-                for line_num, line in enumerate(f, 1):
-                    if line_num > 5000:  # Limit scan depth
-                        break
+            with open(path, 'r', errors='replace') as f:
+                content = f.read(50000)
 
-                    rel_path = os.path.basename(file_path)
+            path_norm = path.replace(os.sep, '/')
 
-                    for pattern in self.OOMKILL_PATTERNS:
-                        if pattern.search(line):
-                            signals["oom_kills"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
+            for pattern, signal_type in self.CRITICAL_PATTERNS:
+                matches = re.findall(pattern, content, re.IGNORECASE)
+                if matches:
+                    # Get context around the match; store actual file path as source
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines):
+                        if re.search(pattern, line, re.IGNORECASE):
+                            context = '\n'.join(lines[max(0, i - 1):min(len(lines), i + 2)])
+                            signals[signal_type].append({
+                                "source": path_norm,
+                                "line": line.strip()[:200],
+                                "context": context[:300],
                             })
-                            break
-
-                    for pattern in self.CRASHLOOP_PATTERNS:
-                        if pattern.search(line):
-                            signals["crashloop_backoffs"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
-                            })
-                            break
-
-                    for pattern in self.IMAGE_PULL_PATTERNS:
-                        if pattern.search(line):
-                            signals["image_pull_errors"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
-                            })
-                            break
-
-                    for pattern in self.NODE_PRESSURE_PATTERNS:
-                        if pattern.search(line):
-                            signals["node_conditions"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
-                            })
-                            break
-
-                    for pattern in self.PVC_PATTERNS:
-                        if pattern.search(line):
-                            signals["pending_pvcs"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
-                            })
-                            break
-
-                    for pattern in self.DNS_PATTERNS:
-                        if pattern.search(line):
-                            signals["dns_issues"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
-                            })
-                            break
-
-                    for pattern in self.RBAC_PATTERNS:
-                        if pattern.search(line):
-                            signals["rbac_issues"].append({
-                                "source": rel_path,
-                                "line": line_num,
-                                "content": line.strip()[:500],
-                                "type": "log_line"
-                            })
+                            if signal_type not in [s.get("type") for s in signals["raw_signals"]]:
+                                signals["raw_signals"].append({
+                                    "type": signal_type,
+                                    "source": path_norm,
+                                    "evidence": line.strip()[:200],
+                                })
                             break
 
         except Exception:
             pass
 
-    def _scan_manifest(self, file_path: str, signals: Dict):
-        """Scan YAML manifests for pod/resource status."""
+    def _extract_from_events(self, path: str, signals: Dict, extractor=None):
         try:
-            with open(file_path, "r", errors="replace") as f:
-                content = f.read()
-
-            # Look for failed pod indicators in YAML
-            if "status:" in content:
-                for pattern in self.CRASHLOOP_PATTERNS:
-                    if pattern.search(content):
-                        signals["failed_pods"].append({
-                            "source": os.path.basename(file_path),
-                            "content": "Pod in CrashLoopBackOff state",
-                            "type": "manifest"
-                        })
-
-                for pattern in self.IMAGE_PULL_PATTERNS:
-                    if pattern.search(content):
-                        signals["failed_pods"].append({
-                            "source": os.path.basename(file_path),
-                            "content": "Pod with image pull error",
-                            "type": "manifest"
-                        })
-
-        except Exception:
-            pass
-
-    def _scan_status_file(self, file_path: str, signals: Dict):
-        """Scan JSON status files for structured data."""
-        try:
-            with open(file_path, "r") as f:
+            with open(path, 'r', errors='replace') as f:
                 data = json.load(f)
 
-            # Look for K8s event objects
-            if isinstance(data, dict):
-                items = data.get("items", [data])
-                for item in items if isinstance(items, list) else [items]:
-                    if isinstance(item, dict):
-                        kind = item.get("kind", "")
-                        if kind == "Event":
-                            event_type = item.get("type", "Normal")
-                            if event_type == "Warning":
-                                signals["recent_events"].append({
-                                    "source": os.path.basename(file_path),
-                                    "content": item.get("message", ""),
-                                    "reason": item.get("reason", ""),
-                                    "type": "k8s_event"
-                                })
+            path_norm = path.replace(os.sep, '/')
+            items = data.get('items', []) if isinstance(data, dict) else []
+            for event in items[:100]:
+                reason = event.get('reason', '')
+                message = event.get('message', '')
+                event_type = event.get('type', '')
+                involved = event.get('involvedObject', {})
 
-        except (json.JSONDecodeError, Exception):
+                text = f"{reason} {message}"
+
+                for pattern, signal_type in self.CRITICAL_PATTERNS:
+                    if re.search(pattern, text, re.IGNORECASE):
+                        signals[signal_type].append({
+                            "source": path_norm,
+                            "reason": reason,
+                            "message": message[:200],
+                            "object": f"{involved.get('kind', '')}/{involved.get('name', '')}",
+                        })
+                        signals["events"].append({
+                            "reason": reason,
+                            "message": message[:200],
+                            "type": event_type,
+                            "object": f"{involved.get('kind', '')}/{involved.get('name', '')}",
+                        })
+                        break
+
+        except Exception:
+            pass
+
+    def _extract_from_status(self, path: str, signals: Dict, extractor=None):
+        try:
+            with open(path, 'r', errors='replace') as f:
+                data = json.load(f)
+
+            path_norm = path.replace(os.sep, '/')
+
+            # Handle pod status JSON (Troubleshoot format)
+            if isinstance(data, dict):
+                items = data.get('items', [])
+                kind = data.get('kind', '')
+                path_lower = path_norm.lower()
+
+                for item in items[:50]:
+                    metadata = item.get('metadata', {})
+                    name = metadata.get('name', 'unknown')
+                    namespace = metadata.get('namespace', 'default')
+                    item_kind = item.get('kind', kind)
+
+                    # Pod status
+                    if item_kind == 'Pod' or 'pods' in path_lower:
+                        status = item.get('status', {})
+                        phase = status.get('phase', '')
+                        container_statuses = status.get('containerStatuses', [])
+
+                        for cs in container_statuses:
+                            state = cs.get('state', {})
+                            restart_count = cs.get('restartCount', 0)
+
+                            waiting = state.get('waiting', {})
+                            terminated = state.get('terminated', {})
+
+                            reason = waiting.get('reason', '') or terminated.get('reason', '')
+
+                            pod_info = {
+                                "source": path_norm,
+                                "name": name,
+                                "namespace": namespace,
+                                "container": cs.get('name', ''),
+                                "reason": reason,
+                                "restarts": restart_count,
+                                "phase": phase,
+                            }
+
+                            if reason in ('OOMKilled',):
+                                signals["oomkill"].append(pod_info)
+                                signals["pod_statuses"].append({**pod_info, "status": "OOMKilled"})
+                            elif reason in ('CrashLoopBackOff',):
+                                signals["crashloop"].append(pod_info)
+                                signals["pod_statuses"].append({**pod_info, "status": "CrashLoopBackOff"})
+                            elif reason in ('ImagePullBackOff', 'ErrImagePull'):
+                                signals["imagepull"].append(pod_info)
+                                signals["pod_statuses"].append({**pod_info, "status": reason})
+                            elif restart_count > 3:
+                                signals["backoff"].append(pod_info)
+                                signals["pod_statuses"].append({**pod_info, "status": "HighRestarts"})
+
+                    # Node status
+                    elif item_kind == 'Node' or 'nodes' in path_lower:
+                        status = item.get('status', {})
+                        conditions = status.get('conditions', [])
+                        for cond in conditions:
+                            cond_type = cond.get('type', '')
+                            cond_status = cond.get('status', '')
+                            message = cond.get('message', '')
+                            if cond_type == 'MemoryPressure' and cond_status == 'True':
+                                signals["memorypressure"].append({"source": path_norm, "node": name, "message": message})
+                            elif cond_type == 'DiskPressure' and cond_status == 'True':
+                                signals["diskpressure"].append({"source": path_norm, "node": name, "message": message})
+                            elif cond_type == 'Ready' and cond_status == 'False':
+                                signals["notready"].append({"source": path_norm, "node": name, "message": message})
+                                signals["node_statuses"].append({"source": path_norm, "node": name, "condition": "NotReady"})
+
+                    # PVC status
+                    elif item_kind == 'PersistentVolumeClaim' or 'pvcs' in path_lower:
+                        pvc_status = item.get('status', {})
+                        phase = pvc_status.get('phase', '')
+                        if phase == 'Pending':
+                            signals["pvc"].append({
+                                "source": path_norm,
+                                "name": name,
+                                "namespace": namespace,
+                                "phase": phase,
+                            })
+
+        except Exception:
             pass

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import LiveAnalysis from '@/components/LiveAnalysis';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 export default function StreamPage() {
   const params = useParams();

@@ -35,6 +35,11 @@ export default function RootLayout({
             <div className="flex gap-4 text-sm">
               <Link href="/" className="text-gray-600 hover:text-gray-900">Upload</Link>
               <Link href="/bundles" className="text-gray-600 hover:text-gray-900">Dashboard</Link>
+              <Link href="/search" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Search</Link>
+              <Link href="/patterns" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Patterns</Link>
+              <Link href="/companies" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Companies</Link>
+              <Link href="/triage" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Triage</Link>
+              <Link href="/alerts" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Alerts</Link>
             </div>
           </div>
         </nav>

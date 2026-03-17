@@ -9,6 +9,10 @@ interface Bundle {
   status: string;
   upload_time: string;
   finding_count: number;
+  company_id?: string | null;
+  project_id?: string | null;
+  company_name?: string | null;
+  project_name?: string | null;
 }
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
@@ -45,6 +49,45 @@ function HealthBar({ bundleId, findingCount }: { bundleId: string; findingCount:
   );
 }
 
+function BundleActions({ bundleId, onDelete, onArchive }: {
+  bundleId: string;
+  onDelete: () => void;
+  onArchive: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirming) { setConfirming(true); setTimeout(() => setConfirming(false), 3000); return; }
+    await fetch(`${API}/bundles/${bundleId}`, { method: 'DELETE' }).catch(() => {});
+    onDelete();
+  };
+
+  const handleArchive = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await fetch(`${API}/bundles/${bundleId}/archive`, { method: 'POST' }).catch(() => {});
+    onArchive();
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+      <button onClick={handleArchive} style={{ padding: '4px 10px', border: '1px solid #e2e8f0', borderRadius: '5px', background: '#fff', color: '#64748b', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}>
+        Archive
+      </button>
+      <button onClick={handleDelete} style={{
+        padding: '4px 10px', border: '1px solid',
+        borderColor: confirming ? '#ef4444' : '#e2e8f0',
+        borderRadius: '5px',
+        background: confirming ? '#fef2f2' : '#fff',
+        color: confirming ? '#dc2626' : '#64748b',
+        fontSize: '11px', cursor: 'pointer', fontWeight: confirming ? 700 : 400,
+      }}>
+        {confirming ? 'Confirm?' : 'Delete'}
+      </button>
+    </div>
+  );
+}
+
 function AiName({ bundleId, filename }: { bundleId: string; filename: string }) {
   const [name, setName] = useState<string | null>(null);
 
@@ -65,17 +108,33 @@ function AiName({ bundleId, filename }: { bundleId: string; filename: string }) 
   );
 }
 
-export default function BundleList() {
+export default function BundleList({ companyId, projectId }: { companyId?: string; projectId?: string } = {}) {
   const [bundles, setBundles] = useState<Bundle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
-    fetch(`${API}/bundles`)
-      .then(r => r.json())
-      .then(d => { setBundles(d.bundles || []); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
+    const params = new URLSearchParams();
+    if (companyId) params.set('company_id', companyId);
+    if (projectId) params.set('project_id', projectId);
+    const qs = params.toString();
+    const url = `${API}/bundles${qs ? `?${qs}` : ''}`;
+    console.log('[BundleList] Fetching bundles:', url);
+    fetch(url)
+      .then(r => {
+        console.log('[BundleList] Response status:', r.status, r.statusText);
+        return r.json();
+      })
+      .then(d => {
+        console.log('[BundleList] Parsed data keys:', d ? Object.keys(d) : 'null', 'bundles count:', d?.bundles?.length ?? 0);
+        setBundles(d?.bundles ?? []);
+      })
+      .catch(err => {
+        console.warn('[BundleList] Fetch failed:', err);
+      })
+      .finally(() => setLoading(false));
+  }, [companyId, projectId]);
 
   if (loading) return <div style={{ padding: '40px', textAlign: 'center' as const, color: '#64748b' }}>Loading bundles...</div>;
   if (!bundles.length) return (
@@ -89,9 +148,9 @@ export default function BundleList() {
     <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '8px' }}>
       {bundles.map(bundle => (
         <div key={bundle.id} onClick={() => router.push(`/bundles/${bundle.id}`)}
-          style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '16px 20px', cursor: 'pointer', transition: 'all .15s', display: 'flex', alignItems: 'center', gap: '16px' }}
-          onMouseEnter={e => (e.currentTarget.style.borderColor = '#93c5fd')}
-          onMouseLeave={e => (e.currentTarget.style.borderColor = '#e2e8f0')}
+          style={{ background: '#fff', border: `1px solid ${hoveredId === bundle.id ? '#93c5fd' : '#e2e8f0'}`, borderRadius: '10px', padding: '16px 20px', cursor: 'pointer', transition: 'all .15s', display: 'flex', alignItems: 'center', gap: '16px' }}
+          onMouseEnter={() => setHoveredId(bundle.id)}
+          onMouseLeave={() => setHoveredId(null)}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
             {bundle.status === 'completed'
@@ -100,6 +159,11 @@ export default function BundleList() {
             }
             <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>
               {formatSize(bundle.file_size)} · {formatTime(bundle.upload_time)}
+              {(bundle.company_name || bundle.project_name) && (
+                <span style={{ display: 'block', marginTop: '2px', color: '#64748b', fontSize: '11px' }}>
+                  {[bundle.company_name, bundle.project_name].filter(Boolean).join(' · ')}
+                </span>
+              )}
             </div>
           </div>
 
@@ -120,6 +184,13 @@ export default function BundleList() {
             }}>
               {bundle.status === 'completed' ? 'Completed' : bundle.status === 'analyzing' ? 'Analyzing...' : bundle.status}
             </span>
+            {hoveredId === bundle.id && bundle.status === 'completed' && (
+              <BundleActions
+                bundleId={bundle.id}
+                onDelete={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
+                onArchive={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
+              />
+            )}
           </div>
         </div>
       ))}

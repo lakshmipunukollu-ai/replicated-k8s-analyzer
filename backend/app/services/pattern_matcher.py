@@ -18,8 +18,9 @@ class PatternMatcher:
         """
         findings = []
 
-        # Pattern 1: OOMKill
-        if signals.get("oom_kills"):
+        # Pattern 1: OOMKill (oomkill from SignalExtractor)
+        oom_evidence = signals.get("oomkill") or signals.get("oom_kills") or []
+        if oom_evidence:
             findings.append(self._create_finding(
                 severity="critical",
                 category="resource",
@@ -30,7 +31,7 @@ class PatternMatcher:
                            "The kernel OOM killer terminates the process when cgroup memory limit is reached.",
                 impact="Service unavailability during container restart. Potential data loss if the application "
                        "was processing requests. May trigger CrashLoopBackOff if recurring.",
-                evidence=signals["oom_kills"][:5],
+                evidence=oom_evidence[:5],
                 recommended_actions=[
                     "Increase container memory limits based on actual usage patterns",
                     "Profile application memory usage to identify leaks",
@@ -41,8 +42,9 @@ class PatternMatcher:
                 confidence=0.95
             ))
 
-        # Pattern 2: CrashLoopBackOff
-        if signals.get("crashloop_backoffs"):
+        # Pattern 2: CrashLoopBackOff (crashloop from SignalExtractor)
+        crash_evidence = signals.get("crashloop") or signals.get("crashloop_backoffs") or []
+        if crash_evidence:
             findings.append(self._create_finding(
                 severity="high",
                 category="application",
@@ -53,7 +55,7 @@ class PatternMatcher:
                            "missing configuration, failed health checks, or application bugs.",
                 impact="Service is unavailable. Pod will continue restart attempts with increasing backoff delays "
                        "(up to 5 minutes between attempts).",
-                evidence=signals["crashloop_backoffs"][:5],
+                evidence=crash_evidence[:5],
                 recommended_actions=[
                     "Check container logs for startup errors: kubectl logs <pod> --previous",
                     "Verify all required ConfigMaps and Secrets exist",
@@ -64,8 +66,9 @@ class PatternMatcher:
                 confidence=0.90
             ))
 
-        # Pattern 3: ImagePullBackOff
-        if signals.get("image_pull_errors"):
+        # Pattern 3: ImagePullBackOff (imagepull from SignalExtractor)
+        image_evidence = signals.get("imagepull") or signals.get("image_pull_errors") or []
+        if image_evidence:
             findings.append(self._create_finding(
                 severity="high",
                 category="config",
@@ -76,7 +79,7 @@ class PatternMatcher:
                            "missing registry credentials, or network connectivity to the registry.",
                 impact="Affected pods cannot start. New deployments and rollbacks will fail if they reference "
                        "the unavailable image.",
-                evidence=signals["image_pull_errors"][:5],
+                evidence=image_evidence[:5],
                 recommended_actions=[
                     "Verify the image name and tag exist in the registry",
                     "Check imagePullSecrets are configured correctly",
@@ -87,8 +90,9 @@ class PatternMatcher:
                 confidence=0.92
             ))
 
-        # Pattern 4: PVC Pending
-        if signals.get("pending_pvcs"):
+        # Pattern 4: PVC Pending (pvc from SignalExtractor)
+        pvc_evidence = signals.get("pvc") or signals.get("pending_pvcs") or []
+        if pvc_evidence:
             findings.append(self._create_finding(
                 severity="high",
                 category="storage",
@@ -97,7 +101,7 @@ class PatternMatcher:
                 root_cause="PVC cannot be bound to a PersistentVolume. Common causes: no matching PV available, "
                            "StorageClass not configured, or storage provisioner is not running.",
                 impact="Pods requiring persistent storage cannot start. Data-dependent services are unavailable.",
-                evidence=signals["pending_pvcs"][:5],
+                evidence=pvc_evidence[:5],
                 recommended_actions=[
                     "Check if the required StorageClass exists: kubectl get sc",
                     "Verify the storage provisioner is running",
@@ -108,8 +112,14 @@ class PatternMatcher:
                 confidence=0.88
             ))
 
-        # Pattern 5: Node Conditions
-        if signals.get("node_conditions"):
+        # Pattern 5: Node Conditions (memorypressure, diskpressure, notready, node_statuses from SignalExtractor)
+        node_evidence = (
+            (signals.get("memorypressure") or []) +
+            (signals.get("diskpressure") or []) +
+            (signals.get("notready") or []) +
+            (signals.get("node_conditions") or [])
+        )
+        if node_evidence:
             findings.append(self._create_finding(
                 severity="critical",
                 category="node",
@@ -121,7 +131,7 @@ class PatternMatcher:
                            "running low on available memory.",
                 impact="Pods may be evicted from unhealthy nodes. New pod scheduling may fail. Existing workloads "
                        "may experience degraded performance or termination.",
-                evidence=signals["node_conditions"][:5],
+                evidence=node_evidence[:5],
                 recommended_actions=[
                     "Check node disk usage: kubectl describe node <node> | grep -A5 Conditions",
                     "Clear unused images and containers on affected nodes",
@@ -132,8 +142,9 @@ class PatternMatcher:
                 confidence=0.85
             ))
 
-        # Pattern 6: DNS Issues
-        if signals.get("dns_issues"):
+        # Pattern 6: DNS Issues (dns from SignalExtractor)
+        dns_evidence = signals.get("dns") or signals.get("dns_issues") or []
+        if dns_evidence:
             findings.append(self._create_finding(
                 severity="high",
                 category="network",
@@ -144,7 +155,7 @@ class PatternMatcher:
                            "blocking DNS traffic, or misconfigured DNS settings.",
                 impact="Services cannot discover each other. API calls between microservices will fail. "
                        "External service resolution may also be affected.",
-                evidence=signals["dns_issues"][:5],
+                evidence=dns_evidence[:5],
                 recommended_actions=[
                     "Check CoreDNS pods are running: kubectl get pods -n kube-system -l k8s-app=kube-dns",
                     "Review CoreDNS logs for errors",
@@ -155,8 +166,9 @@ class PatternMatcher:
                 confidence=0.85
             ))
 
-        # Pattern 7: RBAC Issues
-        if signals.get("rbac_issues"):
+        # Pattern 7: RBAC Issues (no equivalent in new extractor; keep for backward compat)
+        rbac_evidence = signals.get("rbac_issues") or []
+        if rbac_evidence:
             findings.append(self._create_finding(
                 severity="medium",
                 category="config",
@@ -167,7 +179,7 @@ class PatternMatcher:
                            "being used by the affected workloads.",
                 impact="Affected services cannot access required Kubernetes resources. Operators may fail "
                        "to manage their target resources.",
-                evidence=signals["rbac_issues"][:5],
+                evidence=rbac_evidence[:5],
                 recommended_actions=[
                     "Review service account permissions for affected pods",
                     "Check ClusterRoleBindings and RoleBindings",
@@ -180,7 +192,7 @@ class PatternMatcher:
 
         # Cross-signal correlations
         # OOMKill + CrashLoopBackOff = memory-caused crash loop
-        if signals.get("oom_kills") and signals.get("crashloop_backoffs"):
+        if oom_evidence and crash_evidence:
             findings.append(self._create_finding(
                 severity="critical",
                 category="resource",
@@ -191,7 +203,7 @@ class PatternMatcher:
                            "to use the same amount of memory, hitting the limit again.",
                 impact="Service is completely unavailable with no chance of recovery without intervention. "
                        "The exponential backoff means recovery time increases with each restart.",
-                evidence=(signals["oom_kills"][:3] + signals["crashloop_backoffs"][:3]),
+                evidence=(oom_evidence[:3] + crash_evidence[:3]),
                 recommended_actions=[
                     "URGENT: Increase memory limits immediately",
                     "Check if a recent deployment changed memory requirements",
@@ -203,8 +215,9 @@ class PatternMatcher:
                 source="correlation"
             ))
 
-        # Node pressure + failed pods = eviction cascade
-        if signals.get("node_conditions") and signals.get("failed_pods"):
+        # Node pressure + failed pods = eviction cascade (failed_pods -> pod_statuses with non-Running)
+        failed_pods = signals.get("failed_pods") or signals.get("pod_statuses") or []
+        if node_evidence and failed_pods:
             findings.append(self._create_finding(
                 severity="critical",
                 category="node",
@@ -215,7 +228,7 @@ class PatternMatcher:
                            "resources. Lower-priority pods are evicted first.",
                 impact="Multiple services may be affected simultaneously. Evicted pods may not reschedule "
                        "if all nodes are under pressure.",
-                evidence=(signals["node_conditions"][:3] + signals["failed_pods"][:3]),
+                evidence=(node_evidence[:3] + failed_pods[:3]),
                 recommended_actions=[
                     "Identify the source of resource consumption on affected nodes",
                     "Scale the cluster to add more nodes",

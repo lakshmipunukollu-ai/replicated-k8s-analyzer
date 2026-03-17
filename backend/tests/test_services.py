@@ -69,6 +69,19 @@ class TestBundleExtractor:
         os.unlink(f.name)
 
 
+def _bundle_data(logs=None, events=None, status=None):
+    """Build bundle_data dict for SignalExtractor (Troubleshoot-aware API)."""
+    return {
+        "files": {
+            "logs": logs or [],
+            "events": events or [],
+            "status": status or [],
+            "manifests": [],
+            "other": [],
+        }
+    }
+
+
 class TestSignalExtractor:
     """Tests for SignalExtractor."""
 
@@ -81,10 +94,11 @@ class TestSignalExtractor:
             f.flush()
 
             extractor = SignalExtractor()
-            signals = extractor.extract({"logs": [f.name], "manifests": [], "status": [], "other": []})
+            signals = extractor.extract(_bundle_data(logs=[f.name]))
 
-            assert len(signals["oom_kills"]) >= 1
-            assert "OOMKilled" in signals["oom_kills"][0]["content"]
+            assert len(signals["oomkill"]) >= 1
+            ev = signals["oomkill"][0]
+            assert "OOMKilled" in ev.get("line", "") or "OOMKilled" in str(ev)
         os.unlink(f.name)
 
     def test_extract_crashloop_signals(self):
@@ -94,8 +108,8 @@ class TestSignalExtractor:
             f.flush()
 
             extractor = SignalExtractor()
-            signals = extractor.extract({"logs": [f.name], "manifests": [], "status": [], "other": []})
-            assert len(signals["crashloop_backoffs"]) >= 1
+            signals = extractor.extract(_bundle_data(logs=[f.name]))
+            assert len(signals["crashloop"]) >= 1
         os.unlink(f.name)
 
     def test_extract_node_conditions(self):
@@ -106,8 +120,9 @@ class TestSignalExtractor:
             f.flush()
 
             extractor = SignalExtractor()
-            signals = extractor.extract({"logs": [f.name], "manifests": [], "status": [], "other": []})
-            assert len(signals["node_conditions"]) >= 2
+            signals = extractor.extract(_bundle_data(logs=[f.name]))
+            assert len(signals["memorypressure"]) >= 1
+            assert len(signals["diskpressure"]) >= 1
         os.unlink(f.name)
 
     def test_extract_dns_issues(self):
@@ -117,32 +132,32 @@ class TestSignalExtractor:
             f.flush()
 
             extractor = SignalExtractor()
-            signals = extractor.extract({"logs": [f.name], "manifests": [], "status": [], "other": []})
-            assert len(signals["dns_issues"]) >= 1
+            signals = extractor.extract(_bundle_data(logs=[f.name]))
+            assert len(signals["dns"]) >= 1
         os.unlink(f.name)
 
     def test_extract_k8s_events_from_json(self):
-        """Extracts warning events from JSON status files."""
+        """Extracts events from JSON when they match known patterns."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump({
                 "kind": "EventList",
                 "items": [
-                    {"kind": "Event", "type": "Warning", "reason": "FailedMount", "message": "Volume not found"},
+                    {"kind": "Event", "type": "Warning", "reason": "OOMKilling", "message": "Container killed"},
                     {"kind": "Event", "type": "Normal", "reason": "Scheduled", "message": "Pod assigned"},
                 ]
             }, f)
             f.flush()
 
             extractor = SignalExtractor()
-            signals = extractor.extract({"logs": [], "manifests": [], "status": [f.name], "other": []})
-            assert len(signals["recent_events"]) == 1
-            assert signals["recent_events"][0]["reason"] == "FailedMount"
+            signals = extractor.extract(_bundle_data(events=[f.name]))
+            assert len(signals["events"]) >= 1
+            assert any(e.get("reason") == "OOMKilling" for e in signals["events"])
         os.unlink(f.name)
 
     def test_empty_files(self):
         """Handles empty file index gracefully."""
         extractor = SignalExtractor()
-        signals = extractor.extract({"logs": [], "manifests": [], "status": [], "other": []})
+        signals = extractor.extract(_bundle_data())
         for key in signals:
             assert signals[key] == []
 

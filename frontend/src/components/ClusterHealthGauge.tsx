@@ -9,7 +9,7 @@ interface SummaryData {
   total_findings: number;
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 export default function ClusterHealthGauge({ bundleId, data: propData }: { bundleId: string; data?: SummaryData | null }) {
   const [data, setData] = useState<SummaryData | null>(propData ?? null);

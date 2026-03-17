@@ -48,7 +48,7 @@ export default function LiveAnalysis({ bundleId, filename }: LiveAnalysisProps) 
   }, []);
 
   useEffect(() => {
-    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
     const es = new EventSource(`${API}/bundles/${bundleId}/analyze/stream`);
     eventSourceRef.current = es;
 

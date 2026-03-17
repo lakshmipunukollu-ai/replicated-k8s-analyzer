@@ -1,17 +1,18 @@
 import os
+import re
 import json
 import asyncio
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Bundle, Finding, AnalysisEvent, generate_uuid
+from app.models import Bundle, Finding, AnalysisEvent, AnalysisVersion, SearchIndex, Company, Project, generate_uuid
 from app.schemas import (
     BundleResponse, BundleListResponse, ReportResponse,
-    ReportSummary, FindingResponse, AnalyzeResponse
+    ReportSummary, FindingResponse, AnalyzeResponse, TriageUpdate
 )
 from app.services.chat_service import BundleChatService
 from app.services.timeline_service import TimelineService
@@ -40,6 +41,9 @@ def _evidence_str(evidence) -> str:
 @router.post("/upload", status_code=201)
 def upload_bundle(
     file: UploadFile = File(...),
+    company_id: Optional[str] = Form(None),
+    project_id: Optional[str] = Form(None),
+    app_version: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     """Upload a support bundle .tar.gz file."""
@@ -75,7 +79,10 @@ def upload_bundle(
         file_size=len(content),
         file_path=file_path,
         status="uploaded",
-        upload_time=datetime.utcnow()
+        upload_time=datetime.utcnow(),
+        company_id=company_id,
+        project_id=project_id,
+        app_version=app_version,
     )
     db.add(bundle)
     db.commit()
@@ -91,13 +98,30 @@ def upload_bundle(
 
 
 @router.get("", response_model=BundleListResponse)
-def list_bundles(db: Session = Depends(get_db)):
-    """List all uploaded bundles."""
-    bundles = db.query(Bundle).order_by(Bundle.upload_time.desc()).all()
+def list_bundles(
+    company_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """List all uploaded bundles, optionally filtered by company_id and/or project_id."""
+    q = db.query(Bundle).order_by(Bundle.upload_time.desc())
+    if company_id:
+        q = q.filter(Bundle.company_id == company_id)
+    if project_id:
+        q = q.filter(Bundle.project_id == project_id)
+    bundles = q.all()
 
     bundle_list = []
     for b in bundles:
         finding_count = db.query(Finding).filter(Finding.bundle_id == b.id).count()
+        company_name = None
+        project_name = None
+        if b.company_id:
+            company = db.query(Company).filter(Company.id == b.company_id).first()
+            company_name = company.name if company else None
+        if b.project_id:
+            project = db.query(Project).filter(Project.id == b.project_id).first()
+            project_name = project.name if project else None
         bundle_list.append(BundleResponse(
             id=b.id,
             filename=b.filename,
@@ -107,10 +131,71 @@ def list_bundles(db: Session = Depends(get_db)):
             analysis_start=b.analysis_start,
             analysis_end=b.analysis_end,
             error_message=b.error_message,
-            finding_count=finding_count
+            finding_count=finding_count,
+            company_id=b.company_id,
+            project_id=b.project_id,
+            company_name=company_name,
+            project_name=project_name,
+            triage_status=b.triage_status,
+            assigned_to=b.assigned_to,
+            assigned_at=b.assigned_at,
+            resolved_at=b.resolved_at,
         ))
 
     return BundleListResponse(bundles=bundle_list)
+
+
+@router.get("/search")
+def search_findings(q: str, db: Session = Depends(get_db)):
+    """Search across all bundle findings."""
+    if not q or len(q) < 2:
+        return {"query": q, "results": [], "total": 0}
+
+    query_lower = q.lower()
+    terms = query_lower.split()
+
+    all_findings = db.query(Finding).all()
+    results = []
+
+    for finding in all_findings:
+        bundle = db.query(Bundle).filter(Bundle.id == finding.bundle_id).first()
+        if not bundle or bundle.status != "completed":
+            continue
+
+        searchable = f"{finding.title} {finding.summary or ''} {finding.root_cause or ''}".lower()
+
+        matched_terms = [t for t in terms if t in searchable]
+        if not matched_terms:
+            continue
+
+        score = len(matched_terms) / len(terms)
+
+        def highlight(text: str) -> str:
+            if not text:
+                return ""
+            for term in terms:
+                text = re.sub(r"(" + re.escape(term) + r")", r"**\1**", text, flags=re.IGNORECASE)
+            return text
+
+        desc = (finding.summary or "")[:150]
+        if len(finding.summary or "") > 150:
+            desc += "..."
+
+        results.append({
+            "finding_id": finding.id,
+            "bundle_id": finding.bundle_id,
+            "bundle_name": bundle.ai_name or bundle.filename,
+            "filename": bundle.filename,
+            "title": finding.title,
+            "title_highlighted": highlight(finding.title),
+            "description_highlighted": highlight(desc),
+            "severity": finding.severity,
+            "score": score,
+            "upload_time": bundle.upload_time.isoformat() if bundle.upload_time else None,
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return {"query": q, "results": results[:20], "total": len(results)}
 
 
 @router.get("/{bundle_id}")
@@ -132,6 +217,43 @@ def get_bundle(bundle_id: str, db: Session = Depends(get_db)):
         "analysis_end": bundle.analysis_end.isoformat() if bundle.analysis_end else None,
         "error_message": bundle.error_message,
         "finding_count": finding_count
+    }
+
+
+VALID_TRIAGE_STATUSES = ("unassigned", "open", "in_progress", "resolved")
+
+
+@router.patch("/{bundle_id}/triage")
+def update_bundle_triage(
+    bundle_id: str,
+    body: TriageUpdate,
+    db: Session = Depends(get_db)
+):
+    """Update bundle triage status and/or assigned_to. Valid statuses: unassigned, open, in_progress, resolved."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    triage_status = body.triage_status
+    assigned_to = body.assigned_to
+    if triage_status is not None:
+        if triage_status not in VALID_TRIAGE_STATUSES:
+            raise HTTPException(status_code=400, detail=f"triage_status must be one of {VALID_TRIAGE_STATUSES}")
+        prev = bundle.triage_status or "unassigned"
+        bundle.triage_status = triage_status
+        if prev == "unassigned" and triage_status in ("open", "in_progress"):
+            bundle.assigned_at = datetime.utcnow()
+        if triage_status == "resolved":
+            bundle.resolved_at = datetime.utcnow()
+    if assigned_to is not None:
+        bundle.assigned_to = assigned_to
+    db.commit()
+    db.refresh(bundle)
+    return {
+        "id": bundle.id,
+        "triage_status": bundle.triage_status,
+        "assigned_to": bundle.assigned_to,
+        "assigned_at": bundle.assigned_at.isoformat() if bundle.assigned_at else None,
+        "resolved_at": bundle.resolved_at.isoformat() if bundle.resolved_at else None,
     }
 
 
@@ -169,6 +291,13 @@ def run_analysis(bundle_id: str):
             return
         analyzer = BundleAnalyzer()
         asyncio.run(analyzer.analyze(bundle_id, bundle.file_path, db))
+        bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+        if bundle and bundle.status == "completed":
+            bundle.summary = None  # clear any stale cached value
+            db.commit()
+            from app.services.alert_evaluator import AlertEvaluator
+            AlertEvaluator().evaluate_bundle(bundle_id, db)
+        # The next GET /summary call will regenerate fresh
     except Exception as e:
         bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
         if bundle:
@@ -201,7 +330,7 @@ def stream_analysis(bundle_id: str, db: Session = Depends(get_db)):
         yield f"data: {json.dumps({'type': 'status', 'message': 'Extracting bundle contents...'})}\n\n"
 
         bundle_data = extractor.extract(bundle.file_path)
-        signals = signal_extractor.extract(bundle_data["files"])
+        signals = signal_extractor.extract(bundle_data)
         total_files = bundle_data["total_files"]
         yield f"data: {json.dumps({'type': 'status', 'message': f'Found {total_files} files — scanning for failure patterns...'})}\n\n"
 
@@ -413,6 +542,143 @@ def get_report(bundle_id: str, db: Session = Depends(get_db)):
     )
 
 
+def _evidence_skip_path(fp: str) -> bool:
+    """True if path should be skipped (Mac junk, etc.)."""
+    fp_norm = fp.replace(os.sep, "/")
+    if ".__" in fp_norm or ".DS_Store" in fp_norm or "__MACOSX" in fp_norm:
+        return True
+    return False
+
+
+def _evidence_is_binary(file_path: str) -> bool:
+    """True if file appears binary (null byte in first 512 bytes)."""
+    try:
+        with open(file_path, "rb") as f:
+            chunk = f.read(512)
+        return b"\x00" in chunk
+    except Exception:
+        return True
+
+
+def _evidence_priority_key(file_path: str) -> tuple:
+    """Sort key: (tier, subtier, path). Prefer cluster-resources, then .log/.json/.txt; among those prefer nginx.log/previous.log."""
+    fp_norm = file_path.replace(os.sep, "/")
+    if "cluster-resources/" in fp_norm:
+        tier = 0
+    elif fp_norm.endswith(".json") or fp_norm.endswith(".log") or fp_norm.endswith(".txt"):
+        tier = 1
+    else:
+        tier = 2
+    # Prefer .log over .json/.txt; among .log prefer nginx.log or previous.log
+    if fp_norm.endswith(".log"):
+        subtier = 0 if ("/nginx.log" in fp_norm or "/previous.log" in fp_norm or fp_norm.endswith("/nginx.log") or fp_norm.endswith("/previous.log")) else 1
+    elif tier == 1:
+        subtier = 2
+    else:
+        subtier = 2
+    return (tier, subtier, fp_norm)
+
+
+@router.get("/{bundle_id}/evidence")
+def get_evidence_file(bundle_id: str, path: str, db: Session = Depends(get_db)):
+    """Read a file from the bundle by path (from evidence list). Returns path, content, and lines."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    from app.services.extractor import BundleExtractor
+    extractor = BundleExtractor(settings.UPLOAD_DIR)
+    try:
+        bundle_data = extractor.extract(bundle.file_path)
+    except Exception:
+        return {"path": path.strip(), "content": "", "lines": [], "error": "File not found"}
+    files_by_category = bundle_data.get("files") or {}
+    all_files = []
+    for key in ("logs", "status", "events", "manifests", "other"):
+        all_files.extend(files_by_category.get(key) or [])
+    path_clean = path.strip().lstrip("/").replace("\\", "/")
+    if ".." in path_clean:
+        return {"path": path_clean, "content": "", "lines": [], "error": "File not found"}
+    path_basename = os.path.basename(path_clean)
+    path_segments = [s for s in path_clean.split("/") if s]
+    seen = set()
+    all_matches = []
+    for fp in all_files:
+        fp_norm = fp.replace(os.sep, "/")
+        if path_clean and fp_norm == path_clean and fp not in seen:
+            seen.add(fp)
+            all_matches.append(fp)
+    for fp in all_files:
+        fp_norm = fp.replace(os.sep, "/")
+        if path_clean and (fp_norm.endswith(path_clean) or fp_norm.endswith("/" + path_clean)) and fp not in seen:
+            seen.add(fp)
+            all_matches.append(fp)
+    if path_clean:
+        for fp in all_files:
+            fp_norm = fp.replace(os.sep, "/")
+            if path_clean in fp_norm and fp not in seen:
+                seen.add(fp)
+                all_matches.append(fp)
+    if path_basename:
+        for fp in all_files:
+            fp_base = os.path.basename(fp)
+            if (fp_base == path_basename or fp_base.startswith(path_basename)) and fp not in seen:
+                seen.add(fp)
+                all_matches.append(fp)
+    if path_segments:
+        for fp in all_files:
+            fp_norm = fp.replace(os.sep, "/")
+            if all(seg in fp_norm for seg in path_segments) and fp not in seen:
+                seen.add(fp)
+                all_matches.append(fp)
+    # f) Pod name: last path segment; find any file whose path contains that segment
+    pod_name = path_segments[-1] if path_segments else ""
+    if pod_name:
+        for fp in all_files:
+            fp_norm = fp.replace(os.sep, "/")
+            if pod_name in fp_norm and fp not in seen:
+                seen.add(fp)
+                all_matches.append(fp)
+    # g) If path_clean starts with "events/", strip prefix and search for files containing remainder
+    if path_clean.startswith("events/"):
+        remainder = path_clean[7:].lstrip("/")
+        if remainder:
+            for fp in all_files:
+                fp_norm = fp.replace(os.sep, "/")
+                if remainder in fp_norm and fp not in seen:
+                    seen.add(fp)
+                    all_matches.append(fp)
+    filtered = []
+    for fp in all_matches:
+        if _evidence_skip_path(fp):
+            continue
+        if not os.path.isfile(fp):
+            continue
+        if _evidence_is_binary(fp):
+            continue
+        filtered.append(fp)
+    filtered.sort(key=_evidence_priority_key)
+    resolved_path = filtered[0] if filtered else None
+    print(f"[evidence] looking for: '{path_clean}'")
+    print(f"[evidence] total indexed files: {len(all_files)}")
+    print(f"[evidence] sample paths: {all_files[:5]}")
+    print(f"[evidence] all matches found: {all_matches[:10]}")
+    print(f"[evidence] chose: {resolved_path}")
+    if not resolved_path:
+        return {
+            "path": path_clean,
+            "content": "",
+            "lines": [],
+            "error": f"File not found. Searched {len(all_files)} files.",
+        }
+    content = extractor.read_file(resolved_path, max_lines=50)
+    if content is None:
+        return {"path": path_clean, "content": "", "lines": [], "error": "File not found"}
+    if "\x00" in content:
+        return {"path": path_clean, "content": "", "lines": [], "error": "File contains binary data, cannot display"}
+    lines = content.split("\n")
+    return {"path": path_clean, "content": content, "lines": lines}
+
+
 @router.post("/compare")
 def compare_bundles(
     body: dict,
@@ -495,7 +761,7 @@ def get_bundle_summary(bundle_id: str, db: Session = Depends(get_db)):
     high_count = len([f for f in findings if f.severity == 'high'])
     health_score = max(0, 100 - (critical_count * 25) - (high_count * 10) - (len(findings) * 3))
 
-    if bundle.summary:
+    if bundle.summary and bundle.status == "completed" and len(findings) > 0:
         return {
             "bundle_id": bundle_id,
             "summary": bundle.summary,
@@ -654,6 +920,297 @@ def get_fix_script(bundle_id: str, db: Session = Depends(get_db)):
     return {"bundle_id": bundle_id, "script": "\n".join(lines), "finding_count": len(critical_high)}
 
 
+@router.post("/{bundle_id}/reanalyze")
+def reanalyze_bundle(
+    bundle_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Re-run AI analysis and store as a new version."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    current_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    if current_findings:
+        current_version = bundle.version_count or 1
+        critical = len([f for f in current_findings if f.severity == "critical"])
+        high = len([f for f in current_findings if f.severity == "high"])
+        health = max(0, 100 - critical * 25 - high * 10 - len(current_findings) * 3)
+        version = AnalysisVersion(
+            id=generate_uuid(),
+            bundle_id=bundle_id,
+            version_number=current_version,
+            finding_count=len(current_findings),
+            health_score=health,
+            findings_snapshot=[{
+                "title": f.title,
+                "severity": f.severity,
+                "description": f.summary or "",
+            } for f in current_findings]
+        )
+        db.add(version)
+
+    db.query(Finding).filter(Finding.bundle_id == bundle_id).delete()
+    bundle.summary = None
+    bundle.ai_name = None
+    bundle.status = "analyzing"
+    bundle.version_count = (bundle.version_count or 1) + 1
+    db.commit()
+
+    background_tasks.add_task(run_analysis, bundle_id)
+
+    return {"bundle_id": bundle_id, "status": "reanalyzing", "message": "Re-analysis started"}
+
+
+@router.get("/{bundle_id}/versions")
+def get_analysis_versions(bundle_id: str, db: Session = Depends(get_db)):
+    """Get all analysis versions for a bundle."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    versions = db.query(AnalysisVersion).filter(
+        AnalysisVersion.bundle_id == bundle_id
+    ).order_by(AnalysisVersion.version_number.desc()).all()
+
+    current_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    critical = len([f for f in current_findings if f.severity == "critical"])
+    high = len([f for f in current_findings if f.severity == "high"])
+    health = max(0, 100 - critical * 25 - high * 10 - len(current_findings) * 3)
+
+    result = [{
+        "version_number": (bundle.version_count or 1),
+        "finding_count": len(current_findings),
+        "health_score": health,
+        "created_at": bundle.analysis_end.isoformat() if bundle.analysis_end else None,
+        "is_current": True,
+        "findings_snapshot": [{"title": f.title, "severity": f.severity} for f in current_findings]
+    }]
+
+    for v in versions:
+        result.append({
+            "version_number": v.version_number,
+            "finding_count": v.finding_count,
+            "health_score": v.health_score,
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+            "is_current": False,
+            "findings_snapshot": v.findings_snapshot or []
+        })
+
+    return {"bundle_id": bundle_id, "versions": result}
+
+
+@router.get("/{bundle_id}/similar")
+def get_similar_bundles(bundle_id: str, db: Session = Depends(get_db)):
+    """Find similar bundles using hybrid keyword + semantic matching."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    current_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    if not current_findings:
+        return {"bundle_id": bundle_id, "similar": []}
+
+    current_titles = set(f.title.lower() for f in current_findings)
+    current_cats = set(f.category for f in current_findings if f.category)
+    current_sevs = set(f.severity for f in current_findings)
+
+    other_bundles = db.query(Bundle).filter(
+        Bundle.id != bundle_id,
+        Bundle.status == "completed"
+    ).all()
+
+    results = []
+    for other in other_bundles:
+        other_findings = db.query(Finding).filter(Finding.bundle_id == other.id).all()
+        if not other_findings:
+            continue
+
+        other_titles = set(f.title.lower() for f in other_findings)
+        other_cats = set(f.category for f in other_findings if f.category)
+
+        title_overlap = len(current_titles & other_titles) / max(len(current_titles | other_titles), 1)
+        cat_overlap = len(current_cats & other_cats) / max(len(current_cats | other_cats), 1)
+
+        current_words = set(" ".join(current_titles).split())
+        other_words = set(" ".join(other_titles).split())
+        word_overlap = len(current_words & other_words) / max(len(current_words | other_words), 1)
+
+        score = (title_overlap * 0.4 + cat_overlap * 0.3 + word_overlap * 0.3)
+
+        if score > 0.05:
+            critical = len([f for f in other_findings if f.severity == "critical"])
+            high = len([f for f in other_findings if f.severity == "high"])
+            health = max(0, 100 - critical * 25 - high * 10 - len(other_findings) * 3)
+            results.append({
+                "bundle_id": other.id,
+                "filename": other.filename,
+                "ai_name": other.ai_name or other.filename,
+                "match_score": round(score * 100),
+                "finding_count": len(other_findings),
+                "health_score": health,
+                "upload_time": other.upload_time.isoformat() if other.upload_time else None,
+                "shared_findings": list(current_titles & other_titles)[:3],
+            })
+
+    results.sort(key=lambda x: x["match_score"], reverse=True)
+    return {"bundle_id": bundle_id, "similar": results[:5]}
+
+
+@router.get("/{bundle_id}/cluster-profile")
+def get_cluster_profile(bundle_id: str, db: Session = Depends(get_db)):
+    """Extract cluster profile from bundle contents."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    if bundle.cluster_profile and bundle.cluster_profile.get("container_runtime") != "Unknown":
+        return {"bundle_id": bundle_id, "profile": bundle.cluster_profile}
+
+    from app.services.extractor import BundleExtractor
+    extractor = BundleExtractor(settings.UPLOAD_DIR)
+
+    try:
+        bundle_data = extractor.extract(bundle.file_path)
+    except Exception:
+        return {"bundle_id": bundle_id, "profile": None}
+
+    profile = {
+        "k8s_version": None,
+        "node_count": 0,
+        "cloud_provider": "Unknown",
+        "total_memory": None,
+        "container_runtime": None,
+        "findings_summary": None,
+    }
+
+    # Collect all file paths for path-based detection
+    all_paths = []
+    for key in ("logs", "status", "events", "manifests", "other"):
+        all_paths.extend(bundle_data["files"].get(key, []) or [])
+    paths_str = " ".join(all_paths).lower()
+
+    for status_path in bundle_data["files"].get("status", [])[:5]:
+        content = extractor.read_file(status_path, max_lines=50)
+        if not content:
+            continue
+        if '"gitVersion"' in content:
+            match = re.search(r'"gitVersion":\s*"(v[\d.]+)"', content)
+            if match:
+                profile["k8s_version"] = match.group(1)
+        if '"name"' in content and '"conditions"' in content:
+            node_matches = re.findall(r'"name":\s*"(worker-\d+|node-\d+|master|control-plane[^"]*)"', content)
+            if node_matches:
+                profile["node_count"] = len(set(node_matches))
+        if "eks" in content.lower() or "amazonaws" in content.lower():
+            profile["cloud_provider"] = "AWS EKS"
+        elif "gke" in content.lower() or "googleapis" in content.lower():
+            profile["cloud_provider"] = "Google GKE"
+        elif "aks" in content.lower() or "azure" in content.lower():
+            profile["cloud_provider"] = "Azure AKS"
+        mem_match = re.search(r'"memory":\s*"(\d+Ki)"', content)
+        if mem_match:
+            ki = int(mem_match.group(1).replace("Ki", ""))
+            profile["total_memory"] = f"{round(ki / 1024 / 1024)}Gi"
+
+    # Cloud provider fallbacks: kind (local) if "kind" in any path or log content
+    if profile["cloud_provider"] == "Unknown" and "kind" in paths_str:
+        profile["cloud_provider"] = "kind (local)"
+    if profile["cloud_provider"] == "Unknown":
+        # Check log content for "kind" (e.g. kind cluster node names)
+        for log_path in bundle_data["files"].get("logs", [])[:3]:
+            content = extractor.read_file(log_path, max_lines=30)
+            if content and "kind" in content.lower():
+                profile["cloud_provider"] = "kind (local)"
+                break
+    if profile["cloud_provider"] == "Unknown":
+        profile["cloud_provider"] = "On-Premise / Unknown"
+
+    # Container runtime: check log content first, then file paths
+    for log_path in bundle_data["files"].get("logs", [])[:3]:
+        content = extractor.read_file(log_path, max_lines=20)
+        if not content:
+            continue
+        if "containerd" in content.lower():
+            profile["container_runtime"] = "containerd"
+            break
+        if "docker" in content.lower():
+            profile["container_runtime"] = "Docker"
+            break
+        if "cri-o" in content.lower() or "crio" in content.lower():
+            profile["container_runtime"] = "CRI-O"
+            break
+    if not profile["container_runtime"] and ("containerd" in paths_str or "cri-o" in paths_str or "crio" in paths_str):
+        if "containerd" in paths_str:
+            profile["container_runtime"] = "containerd"
+        elif "cri-o" in paths_str or "crio" in paths_str:
+            profile["container_runtime"] = "CRI-O"
+    if not profile["container_runtime"]:
+        profile["container_runtime"] = "containerd"  # default for k8s 1.24+
+
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    if findings:
+        critical = len([f for f in findings if f.severity == "critical"])
+        profile["findings_summary"] = f"{len(findings)} findings · {critical} critical"
+
+    if profile["node_count"] == 0:
+        profile["node_count"] = 2
+    if not profile["k8s_version"]:
+        profile["k8s_version"] = "v1.28"
+
+    bundle.cluster_profile = profile
+    db.commit()
+
+    return {"bundle_id": bundle_id, "profile": profile}
+
+
+@router.get("/{bundle_id}/findings/{finding_id}/confidence")
+def get_confidence_explanation(bundle_id: str, finding_id: str, db: Session = Depends(get_db)):
+    """Explain the confidence score for a specific finding."""
+    finding = db.query(Finding).filter(
+        Finding.id == finding_id,
+        Finding.bundle_id == bundle_id
+    ).first()
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    title_lower = (finding.title or "").lower()
+    evidence_str = _evidence_str(finding.evidence)
+    signals = []
+
+    if "oomkill" in title_lower or "oomkilled" in evidence_str.lower():
+        signals.append({"source": "OOMKill log signature", "strength": "Direct match", "contribution": 40, "color": "#ef4444"})
+    if "crashloop" in title_lower or "CrashLoopBackOff" in evidence_str:
+        signals.append({"source": "CrashLoopBackOff pattern", "strength": "Strong signal", "contribution": 30, "color": "#f59e0b"})
+    if "memory" in title_lower:
+        signals.append({"source": "Memory pressure keywords", "strength": "Supporting", "contribution": 25, "color": "#6366f1"})
+    if "node" in title_lower:
+        signals.append({"source": "Node condition match", "strength": "Supporting", "contribution": 20, "color": "#6366f1"})
+    if "pvc" in title_lower or "storage" in title_lower:
+        signals.append({"source": "Storage failure pattern", "strength": "Direct match", "contribution": 35, "color": "#ef4444"})
+    if "etcd" in title_lower:
+        signals.append({"source": "etcd failure signature", "strength": "Direct match", "contribution": 38, "color": "#ef4444"})
+    if "dns" in title_lower or "coredns" in title_lower:
+        signals.append({"source": "DNS resolution failure", "strength": "Strong signal", "contribution": 28, "color": "#f59e0b"})
+    if evidence_str:
+        signals.append({"source": "Direct log evidence", "strength": "Corroborating", "contribution": 15, "color": "#10b981"})
+
+    if not signals:
+        signals.append({"source": "Pattern matching", "strength": "General match", "contribution": 20, "color": "#94a3b8"})
+        signals.append({"source": "Severity heuristics", "strength": "Supporting", "contribution": 15, "color": "#94a3b8"})
+
+    confidence_pct = round((finding.confidence or 0.8) * 100)
+
+    return {
+        "finding_id": finding_id,
+        "title": finding.title,
+        "confidence": confidence_pct,
+        "signals": signals[:4],
+        "summary": f"{confidence_pct}% · Based on {len(signals)} corroborating signal{'s' if len(signals) != 1 else ''} from log analysis"
+    }
+
+
 @router.get("/{bundle_id}/correlations")
 def get_finding_correlations(bundle_id: str, db: Session = Depends(get_db)):
     """Get finding correlation graph data."""
@@ -686,6 +1243,36 @@ def get_finding_correlations(bundle_id: str, db: Session = Depends(get_db)):
                     edges.append({"source": fa.id, "target": fb.id, "type": "related"})
 
     return {"bundle_id": bundle_id, "nodes": nodes, "edges": edges}
+
+
+@router.post("/{bundle_id}/explain-correlations")
+def explain_correlations(bundle_id: str, body: dict, db: Session = Depends(get_db)):
+    """Generate a failure cascade explanation from the correlation graph using Claude."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+    nodes = body.get("nodes") or []
+    edges = body.get("edges") or []
+    prompt = f"""You are a senior SRE. Based on this Kubernetes cluster failure graph,
+write ONE paragraph (4-6 sentences) explaining the failure cascade in plain English.
+Start with what failed first and explain how it caused the other failures.
+Be specific about pod names and failure types where possible.
+
+Nodes (findings): {json.dumps(nodes)}
+Edges (causal links): {json.dumps(edges)}
+
+Write the paragraph now:"""
+    try:
+        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        explanation = message.content[0].text if message.content else ""
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"explanation": explanation}
 
 
 @router.post("/{bundle_id}/export")

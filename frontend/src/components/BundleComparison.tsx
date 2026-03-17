@@ -17,7 +17,7 @@ export default function BundleComparison() {
   const [result, setResult] = useState<CompareResult | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
   useEffect(() => {
     fetch(`${API}/bundles`)

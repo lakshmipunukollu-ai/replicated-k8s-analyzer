@@ -1,8 +1,10 @@
 import BundleUpload from '@/components/BundleUpload';
+import SafeAlertSummaryBar from '@/components/SafeAlertSummaryBar';
 
 export default function Home() {
   return (
     <div className="py-10">
+      <SafeAlertSummaryBar />
       <h1 className="text-3xl font-bold text-center text-gray-900 mb-2">
         Kubernetes Support Bundle Analyzer
       </h1>

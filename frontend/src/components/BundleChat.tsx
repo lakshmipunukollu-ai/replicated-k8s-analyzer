@@ -20,7 +20,7 @@ export default function BundleChat({ bundleId }: { bundleId: string }) {
     setMessages(m => [...m, { role: 'user', text: question }]);
     setLoading(true);
     try {
-      const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+      const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
       const res = await fetch(`${API}/bundles/${bundleId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

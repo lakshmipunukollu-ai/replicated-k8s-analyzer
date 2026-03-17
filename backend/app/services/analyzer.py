@@ -85,7 +85,7 @@ class BundleAnalyzer:
             "message": "Extracting structured signals..."
         }, event_callback)
 
-        signals = self.signal_extractor.extract(extraction["files"])
+        signals = self.signal_extractor.extract(extraction)
 
         signal_count = sum(len(v) for v in signals.values())
         await self._emit_event(db, bundle_id, "progress", {

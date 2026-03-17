@@ -11,7 +11,7 @@ interface TimelineEvent {
   evidence: string;
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 export default function IncidentTimeline({ bundleId, events: propEvents }: { bundleId: string; events?: TimelineEvent[] }) {
   const [events, setEvents] = useState<TimelineEvent[]>(propEvents ?? []);

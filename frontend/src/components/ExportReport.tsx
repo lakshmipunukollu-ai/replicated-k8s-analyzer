@@ -6,7 +6,7 @@ export default function ExportReport({ bundleId, filename }: { bundleId: string;
   const [copied, setCopied] = useState<string | null>(null);
   const [content, setContent] = useState<{ type: string; text: string } | null>(null);
 
-  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
   const exportAs = async (type: 'slack' | 'jira') => {
     setLoading(type);
@@ -14,7 +14,7 @@ export default function ExportReport({ bundleId, filename }: { bundleId: string;
       const res = await fetch(`${API}/bundles/${bundleId}/export`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify({ type, use_ai_title: true }),
       });
       const data = await res.json();
       setContent({ type, text: data.content });

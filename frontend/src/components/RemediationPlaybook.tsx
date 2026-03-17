@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 interface Step { step: number; label: string; type: string; cmd: string; color: string; bg: string; text_color: string; }
 interface Playbook { finding_title: string; severity: string; steps: Step[]; }
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002';
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 export default function RemediationPlaybook({ bundleId, playbook: propPlaybook }: { bundleId: string; playbook?: Playbook[] }) {
   const [playbooks, setPlaybooks] = useState<Playbook[]>(propPlaybook ?? []);

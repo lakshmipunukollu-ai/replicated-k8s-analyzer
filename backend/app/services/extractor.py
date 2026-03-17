@@ -51,20 +51,45 @@ class BundleExtractor:
         }
 
     def _index_files(self, extract_dir: str) -> Dict[str, List[str]]:
-        """Index extracted files by type."""
+        """Index extracted files by type, with Troubleshoot-aware path handling."""
         indexed = {
             "logs": [],
             "manifests": [],
             "status": [],
+            "events": [],
             "other": []
         }
 
         for root, dirs, files in os.walk(extract_dir):
             for f in files:
                 full_path = os.path.join(root, f)
-                rel_path = os.path.relpath(full_path, extract_dir)
+                rel_path = os.path.relpath(full_path, extract_dir).replace(os.sep, "/")
+                rel_lower = rel_path.lower()
 
-                if f.endswith(".log") or "logs" in rel_path.lower():
+                # Troubleshoot-specific paths
+                # Pod logs: cluster-resources/pods/logs/**/*.log
+                if "cluster-resources/pods/logs" in rel_lower and f.endswith(".log"):
+                    indexed["logs"].append(full_path)
+                # All-logs directory
+                elif "all-logs" in rel_lower and f.endswith(".log"):
+                    indexed["logs"].append(full_path)
+                # Events JSON
+                elif "cluster-resources/events" in rel_lower and f.endswith(".json"):
+                    indexed["events"].append(full_path)
+                # Pod status JSON
+                elif "cluster-resources/pods" in rel_lower and f.endswith(".json") and "logs" not in rel_lower:
+                    indexed["status"].append(full_path)
+                # Node status
+                elif "cluster-resources/nodes" in rel_lower and f.endswith(".json"):
+                    indexed["status"].append(full_path)
+                # Deployments, replicasets etc
+                elif "cluster-resources" in rel_lower and f.endswith(".json"):
+                    indexed["status"].append(full_path)
+                # Host collectors
+                elif "host-collectors" in rel_lower and f.endswith(".json"):
+                    indexed["status"].append(full_path)
+                # Generic fallbacks
+                elif f.endswith(".log") or "logs" in rel_lower:
                     indexed["logs"].append(full_path)
                 elif f.endswith((".yaml", ".yml")):
                     indexed["manifests"].append(full_path)
