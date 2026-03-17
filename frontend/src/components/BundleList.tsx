@@ -184,7 +184,7 @@ export default function BundleList({ companyId, projectId }: { companyId?: strin
             }}>
               {bundle.status === 'completed' ? 'Completed' : bundle.status === 'analyzing' ? 'Analyzing...' : bundle.status}
             </span>
-            {hoveredId === bundle.id && bundle.status === 'completed' && (
+            {hoveredId === bundle.id && (
               <BundleActions
                 bundleId={bundle.id}
                 onDelete={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
