@@ -22,6 +22,10 @@ export default function BundleDetailPage() {
   const [correlations, setCorrelations] = useState<any>({ nodes: [], edges: [] });
   const [playbook, setPlaybook] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [priorityAction, setPriorityAction] = useState<any>(null);
+  const [fixScript, setFixScript] = useState<string | null>(null);
+  const [scriptCopied, setScriptCopied] = useState(false);
+  const [severityFilter, setSeverityFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('Overview');
 
   useEffect(() => {
@@ -48,6 +52,11 @@ export default function BundleDetailPage() {
       fetch(`${API}/bundles/${id}/summary`)
         .then(r => r.json())
         .then(sum => setSummary(sum))
+        .catch(() => {});
+
+      fetch(`${API}/bundles/${id}/priority-action`)
+        .then(r => r.json())
+        .then(d => setPriorityAction(d))
         .catch(() => {});
     }).catch(() => setLoading(false));
   }, [id]);
@@ -127,6 +136,15 @@ export default function BundleDetailPage() {
       {activeTab === 'Overview' && (
         <div>
           <ClusterHealthGauge bundleId={id} data={summary} />
+          {priorityAction?.action && (
+            <div style={{ background: '#1e3a5f', borderRadius: '8px', padding: '16px 20px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', flexShrink: 0 }}>→</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '10px', fontWeight: 700, color: '#93c5fd', textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '4px' }}>Start Here</div>
+                <div style={{ fontSize: '14px', color: '#f1f5f9', fontWeight: 500 }}>{priorityAction.action}</div>
+              </div>
+            </div>
+          )}
           <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px 18px', marginBottom: '16px' }}>
             <div style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '10px' }}>By severity</div>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' as const }}>
@@ -151,8 +169,26 @@ export default function BundleDetailPage() {
       )}
 
       {activeTab === 'Findings' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {findings.map((f: any, i: number) => (
+        <div>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+            {['all', 'critical', 'high', 'medium', 'low'].map(sev => {
+              const count = sev === 'all' ? findings.length : findings.filter(f => f.severity === sev).length;
+              if (count === 0 && sev !== 'all') return null;
+              return (
+                <button key={sev} onClick={() => setSeverityFilter(sev)} style={{
+                  padding: '5px 14px', borderRadius: '20px', border: '1px solid',
+                  borderColor: severityFilter === sev ? '#1e3a5f' : '#e2e8f0',
+                  background: severityFilter === sev ? '#1e3a5f' : '#fff',
+                  color: severityFilter === sev ? '#fff' : '#475569',
+                  fontSize: '12px', fontWeight: 500, cursor: 'pointer',
+                }}>
+                  {sev === 'all' ? 'All' : sev.charAt(0).toUpperCase() + sev.slice(1)} ({count})
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '10px' }}>
+            {findings.filter(f => severityFilter === 'all' || f.severity === severityFilter).map((f: any, i: number) => (
             <div key={i} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
               <div style={{ padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ background: severityBg[f.severity], color: severityColor[f.severity], fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '20px', textTransform: 'uppercase' as const }}>{f.severity}</span>
@@ -169,12 +205,49 @@ export default function BundleDetailPage() {
               </div>
             </div>
           ))}
+          </div>
         </div>
       )}
 
       {activeTab === 'Timeline' && <IncidentTimeline bundleId={id} events={timeline} />}
       {activeTab === 'Correlations' && <CorrelationGraph bundleId={id} nodes={correlations.nodes} edges={correlations.edges} />}
-      {activeTab === 'Playbook' && <RemediationPlaybook bundleId={id} playbook={playbook} />}
+      {activeTab === 'Playbook' && (
+        <div>
+          <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px 18px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>Generate Complete Fix Script</div>
+              <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>One bash script combining all remediation steps in order</div>
+            </div>
+            <button
+              onClick={async () => {
+                const res = await fetch(`${API}/bundles/${id}/fix-script`);
+                const data = await res.json();
+                setFixScript(data.script);
+              }}
+              style={{ padding: '8px 18px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' as const }}
+            >
+              Generate Fix Script
+            </button>
+          </div>
+          {fixScript && (
+            <div style={{ background: '#0f172a', borderRadius: '8px', padding: '16px', marginBottom: '16px', position: 'relative' as const }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8' }}>remediate.sh</span>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(fixScript); setScriptCopied(true); setTimeout(() => setScriptCopied(false), 2000); }}
+                  style={{ padding: '4px 12px', background: scriptCopied ? '#10b981' : '#1e293b', color: '#fff', border: '1px solid #334155', borderRadius: '5px', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                >
+                  {scriptCopied ? '✓ Copied!' : 'Copy Script'}
+                </button>
+              </div>
+              <pre style={{ fontFamily: 'monospace', fontSize: '12px', color: '#e2e8f0', margin: 0, whiteSpace: 'pre-wrap' as const, maxHeight: '300px', overflowY: 'auto' as const }}>
+                {fixScript}
+              </pre>
+            </div>
+          )}
+          <RemediationPlaybook bundleId={id} playbook={playbook} />
+        </div>
+      )}
       {activeTab === 'Export' && <ExportReport bundleId={id} filename={bundle.filename} />}
       {activeTab === 'Ask AI' && <BundleChat bundleId={id} />}
     </div>

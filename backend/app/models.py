@@ -22,6 +22,7 @@ class Bundle(Base):
     analysis_end = Column(DateTime, nullable=True)
     error_message = Column(Text, nullable=True)
     summary = Column(Text, nullable=True)
+    ai_name = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

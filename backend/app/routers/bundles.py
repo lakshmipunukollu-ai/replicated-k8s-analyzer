@@ -541,6 +541,119 @@ Write the summary paragraph now:"""}]
     }
 
 
+@router.get("/{bundle_id}/ai-name")
+def get_ai_bundle_name(bundle_id: str, db: Session = Depends(get_db)):
+    """Generate a descriptive AI name for a bundle based on its findings."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    if bundle.ai_name:
+        return {"bundle_id": bundle_id, "ai_name": bundle.ai_name}
+
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    if not findings:
+        return {"bundle_id": bundle_id, "ai_name": bundle.filename}
+
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    top_findings = sorted(findings, key=lambda f: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(f.severity, 4))[:3]
+    findings_text = ", ".join([f.title for f in top_findings])
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=30,
+        messages=[{"role": "user", "content": f"""Generate a short descriptive name (max 6 words) for a Kubernetes cluster incident based on these findings: {findings_text}.
+Format: "[Main Issue] — [Component]" like "Memory Crisis — API Server OOMKill" or "etcd Failure — DNS Cascade".
+Return ONLY the name, nothing else."""}]
+    )
+
+    ai_name = message.content[0].text.strip().strip('"')
+    bundle.ai_name = ai_name
+    db.commit()
+
+    return {"bundle_id": bundle_id, "ai_name": ai_name}
+
+
+@router.get("/{bundle_id}/priority-action")
+def get_priority_action(bundle_id: str, db: Session = Depends(get_db)):
+    """Get the single most important action to fix the cluster."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    if not findings:
+        return {"bundle_id": bundle_id, "action": None}
+
+    critical = [f for f in findings if f.severity == "critical"]
+    top = critical[0] if critical else findings[0]
+
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    all_titles = [f.title for f in findings]
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=100,
+        messages=[{"role": "user", "content": f"""Given these Kubernetes findings: {', '.join(all_titles)}
+The most critical is: {top.title} — {top.root_cause or ''}
+
+Write ONE sentence (max 25 words) starting with an action verb that tells the engineer exactly what to do first and how many findings it resolves.
+Example: "Increase api-server memory limit from 256Mi to 512Mi — resolves 3 of 4 critical findings."
+Return ONLY the sentence."""}]
+    )
+
+    action = message.content[0].text.strip()
+
+    return {
+        "bundle_id": bundle_id,
+        "action": action,
+        "severity": top.severity,
+        "finding_title": top.title,
+    }
+
+
+@router.get("/{bundle_id}/fix-script")
+def get_fix_script(bundle_id: str, db: Session = Depends(get_db)):
+    """Generate a single combined bash fix script for all critical/high findings."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    critical_high = [f for f in findings if f.severity in ("critical", "high")]
+
+    if not critical_high:
+        return {"bundle_id": bundle_id, "script": "# No critical or high findings to remediate"}
+
+    lines = [
+        "#!/bin/bash",
+        "# Auto-generated remediation script",
+        f"# Bundle: {bundle.filename}",
+        f"# Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+        f"# Findings addressed: {len(critical_high)}",
+        "",
+        "set -e",
+        "echo 'Starting cluster remediation...'",
+        "",
+    ]
+
+    for i, finding in enumerate(critical_high, 1):
+        lines += [
+            f"# ── Step {i}: {finding.title} ──",
+            f"echo 'Step {i}/{len(critical_high)}: Addressing {finding.severity.upper()} - {finding.title}'",
+        ]
+        for action in (finding.recommended_actions or [])[:2]:
+            if any(cmd in (action or "").lower() for cmd in ["kubectl", "helm", "k8s", "increase", "set", "apply"]):
+                lines.append(f"# {action}")
+        lines += ["", ""]
+
+    lines += [
+        "echo 'Remediation complete. Verify with: kubectl get nodes,pods --all-namespaces'",
+    ]
+
+    return {"bundle_id": bundle_id, "script": "\n".join(lines), "finding_count": len(critical_high)}
+
+
 @router.get("/{bundle_id}/correlations")
 def get_finding_correlations(bundle_id: str, db: Session = Depends(get_db)):
     """Get finding correlation graph data."""
