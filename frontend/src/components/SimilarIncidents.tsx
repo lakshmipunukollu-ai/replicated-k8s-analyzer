@@ -45,7 +45,7 @@ export default function SimilarIncidents({ bundleId }: { bundleId: string }) {
   return (
     <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
       <div style={{ padding: '14px 18px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc' }}>
-        <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>We've seen this before</div>
+        <div style={{ fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>We&apos;ve seen this before</div>
         <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>{similar.length} similar incident{similar.length !== 1 ? 's' : ''} found in your history</div>
       </div>
       <div style={{ padding: '8px 0' }}>

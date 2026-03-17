@@ -40,6 +40,7 @@ export default function RootLayout({
               <Link href="/companies" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Companies</Link>
               <Link href="/triage" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Triage</Link>
               <Link href="/alerts" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Alerts</Link>
+              <Link href="/suppression" style={{ color: '#475569', fontSize: '14px', textDecoration: 'none' }}>Suppression</Link>
             </div>
           </div>
         </nav>

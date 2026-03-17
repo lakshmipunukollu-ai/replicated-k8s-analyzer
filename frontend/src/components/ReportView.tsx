@@ -57,6 +57,11 @@ export default function ReportView({ report }: ReportViewProps) {
 
       {/* Findings list */}
       <div>
+        {summary.suppressed_count != null && summary.suppressed_count > 0 && (
+          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+            {summary.suppressed_count} finding{summary.suppressed_count !== 1 ? 's' : ''} suppressed by company rules
+          </p>
+        )}
         <h3 className="text-sm font-semibold text-gray-600 uppercase mb-3">
           All Findings ({findings.length})
         </h3>

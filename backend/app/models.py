@@ -159,3 +159,14 @@ class AnalysisEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     bundle = relationship("Bundle", back_populates="events")
+
+
+class SuppressionRule(Base):
+    __tablename__ = "suppression_rules"
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=True)
+    pattern = Column(String(255), nullable=False)
+    reason = Column(Text, nullable=True)
+    created_by = Column(String(255), default="Support Engineer")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

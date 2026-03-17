@@ -9,7 +9,10 @@ const API_COMPANIES = `${API}/companies`;
 interface Company { id: string; name: string; slug: string; tier: string; project_count: number; bundle_count: number; avg_health_score: number | null; }
 interface Project { id: string; name: string; app_version: string | null; bundle_count: number; last_bundle_date: string | null; }
 
+type UploadMode = 'file' | 'url';
+
 export default function BundleUpload() {
+  const [mode, setMode] = useState<UploadMode>('file');
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,6 +22,8 @@ export default function BundleUpload() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>('');
   const [appVersion, setAppVersion] = useState('');
+  const [intakeUrl, setIntakeUrl] = useState('');
+  const [intakeFilename, setIntakeFilename] = useState('');
   const router = useRouter();
 
   useEffect(() => {
@@ -93,8 +98,163 @@ export default function BundleUpload() {
     }
   }, []);
 
+  const handleImportFromUrl = useCallback(async () => {
+    const url = intakeUrl.trim();
+    if (!url) {
+      setError('Please enter a URL');
+      return;
+    }
+    if (!url.startsWith('https://')) {
+      setError('URL must start with https://');
+      return;
+    }
+    setUploading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/bundles/intake-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          filename: intakeFilename.trim() || undefined,
+          company_id: companyId || undefined,
+          project_id: projectId || undefined,
+          app_version: appVersion.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'Import failed');
+      }
+      const data = await res.json();
+      router.push(`/bundles/${data.id}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setUploading(false);
+    }
+  }, [intakeUrl, intakeFilename, companyId, projectId, appVersion, router]);
+
   return (
     <div className="max-w-lg mx-auto">
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', justifyContent: 'center' }}>
+        <button
+          type="button"
+          onClick={() => setMode('file')}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: `1px solid ${mode === 'file' ? '#1e3a5f' : '#e2e8f0'}`,
+            background: mode === 'file' ? '#1e3a5f' : '#fff',
+            color: mode === 'file' ? '#fff' : '#475569',
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Upload File
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode('url')}
+          style={{
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: `1px solid ${mode === 'url' ? '#1e3a5f' : '#e2e8f0'}`,
+            background: mode === 'url' ? '#1e3a5f' : '#fff',
+            color: mode === 'url' ? '#fff' : '#475569',
+            fontSize: '13px',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Import from URL
+        </button>
+      </div>
+
+      {mode === 'url' ? (
+        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Bundle URL</label>
+            <input
+              type="url"
+              value={intakeUrl}
+              onChange={(e) => setIntakeUrl(e.target.value)}
+              placeholder="https://..."
+              style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', color: '#1e293b', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Filename (optional)</label>
+            <input
+              type="text"
+              value={intakeFilename}
+              onChange={(e) => setIntakeFilename(e.target.value)}
+              placeholder="Inferred from URL if blank"
+              style={{ width: '100%', padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', color: '#1e293b', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Company</label>
+              <select
+                value={companyId}
+                onChange={(e) => setCompanyId(e.target.value)}
+                style={{ width: '100%', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', background: '#fff', color: '#1e293b' }}
+              >
+                <option value="">— None —</option>
+                {companies.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>Project</label>
+              <select
+                value={projectId}
+                onChange={(e) => setProjectId(e.target.value)}
+                disabled={!companyId}
+                style={{ width: '100%', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', background: '#fff', color: '#1e293b' }}
+              >
+                <option value="">— None —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#475569', marginBottom: '4px' }}>App Version</label>
+              <input
+                type="text"
+                value={appVersion}
+                onChange={(e) => setAppVersion(e.target.value)}
+                placeholder="e.g. v2.1.4"
+                style={{ width: '100%', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', color: '#1e293b', boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+          <button
+            onClick={handleImportFromUrl}
+            disabled={uploading}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              background: '#1e3a5f',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              cursor: uploading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {uploading ? 'Importing...' : 'Import Bundle'}
+          </button>
+        </div>
+      ) : null}
+
+      {mode === 'file' ? (
+      <>
       <div
         onDrop={handleDrop}
         onDragEnter={handleDrag}
@@ -193,6 +353,8 @@ export default function BundleUpload() {
           </div>
         </div>
       )}
+      </>
+      ) : null}
     </div>
   );
 }

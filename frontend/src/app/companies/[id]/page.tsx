@@ -14,12 +14,29 @@ interface ProjectRow {
   last_bundle_date: string | null;
 }
 
+interface HealthHistoryEntry {
+  date: string;
+  health_score: number;
+  bundle_id: string;
+  bundle_name: string;
+}
+
+interface VersionCorrelation {
+  version: string;
+  bundle_count: number;
+  avg_health_score: number;
+  finding_counts: { critical?: number; high?: number; medium?: number; low?: number };
+  top_findings: string[];
+  companies: string[];
+}
+
 interface CompanyDetail {
   id: string;
   name: string;
   slug: string;
   tier: string;
   projects: ProjectRow[];
+  health_history?: HealthHistoryEntry[];
 }
 
 export default function CompanyDetailPage() {
@@ -35,6 +52,7 @@ export default function CompanyDetailPage() {
   const [hoveredProjectId, setHoveredProjectId] = useState<string | null>(null);
   const [projectBundles, setProjectBundles] = useState<{ id: string; filename: string; status: string; upload_time: string; finding_count: number }[]>([]);
   const [bundlesLoading, setBundlesLoading] = useState(false);
+  const [versionCorrelations, setVersionCorrelations] = useState<VersionCorrelation[]>([]);
   const router = useRouter();
 
   useEffect(() => {
@@ -45,6 +63,13 @@ export default function CompanyDetailPage() {
       .catch(() => setCompany(null))
       .finally(() => setLoading(false));
   }, [id]);
+
+  useEffect(() => {
+    fetch(`${API}/patterns/app-version-correlation`)
+      .then((r) => r.json())
+      .then((data) => setVersionCorrelations(data.correlations || []))
+      .catch(() => setVersionCorrelations([]));
+  }, []);
 
   useEffect(() => {
     if (!selectedProjectId) {
@@ -119,7 +144,7 @@ export default function CompanyDetailPage() {
       </div>
 
       <div style={{ marginBottom: '24px' }}>
-        <HealthTrendChart />
+        <HealthTrendChart healthHistory={company.health_history} />
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -173,6 +198,39 @@ export default function CompanyDetailPage() {
             </div>
           );
         })}
+      </div>
+
+      <div style={{ marginTop: '24px' }}>
+        <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#1e293b', marginBottom: '12px' }}>Version Health</h2>
+        <p style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>Health by app version for this company</p>
+        {versionCorrelations.length === 0 ? (
+          <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px' }}>No version data yet. Upload bundles with an app version to see correlations.</div>
+        ) : (
+          <div style={{ overflowX: 'auto', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                  <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: '#475569' }}>App Version</th>
+                  <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: '#475569' }}>Bundles</th>
+                  <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: '#475569' }}>Avg Health</th>
+                  <th style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 600, color: '#475569' }}>Top Issue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {versionCorrelations
+                  .filter((v) => company.projects.some((p) => p.app_version === v.version) || v.companies.includes(company.name))
+                  .map((v) => (
+                    <tr key={v.version} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '10px 12px', color: '#1e293b', fontWeight: 500 }}>{v.version}</td>
+                      <td style={{ padding: '10px 12px', color: '#64748b' }}>{v.bundle_count}</td>
+                      <td style={{ padding: '10px 12px', color: v.avg_health_score >= 70 ? '#15803d' : v.avg_health_score >= 40 ? '#b45309' : '#b91c1c', fontWeight: 600 }}>{v.avg_health_score}</td>
+                      <td style={{ padding: '10px 12px', color: '#64748b', maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.top_findings?.[0] || '—'}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {selectedProjectId && (

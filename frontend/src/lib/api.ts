@@ -33,6 +33,7 @@ export interface ReportSummary {
   by_severity: Record<string, number>;
   by_category: Record<string, number>;
   analysis_duration_seconds?: number;
+  suppressed_count?: number;
 }
 
 export interface Report {

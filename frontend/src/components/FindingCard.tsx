@@ -131,7 +131,7 @@ export default function FindingCard({ finding, expanded = false, bundleId: propB
   };
 
   const highlightLine = (line: string) => {
-    let rest = line;
+    const rest = line;
     const parts: React.ReactNode[] = [];
     const re = new RegExp(EVIDENCE_HIGHLIGHT_KEYWORDS.join('|'), 'gi');
     let m: RegExpExecArray | null;

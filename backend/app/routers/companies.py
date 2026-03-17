@@ -75,7 +75,7 @@ def create_company(body: CompanyCreate, db: Session = Depends(get_db)):
 
 @router.get("/companies/{company_id}")
 def get_company(company_id: str, db: Session = Depends(get_db)):
-    """Get company with nested projects (bundle_count, last_bundle_date per project)."""
+    """Get company with nested projects and health_history (one entry per completed bundle)."""
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -92,12 +92,34 @@ def get_company(company_id: str, db: Session = Depends(get_db)):
             "bundle_count": bundle_count,
             "last_bundle_date": last_bundle_date,
         })
+
+    # health_history: one entry per completed bundle for this company, sorted by upload_time asc
+    company_bundles = (
+        db.query(Bundle)
+        .filter(Bundle.company_id == company_id, Bundle.status == "completed")
+        .order_by(Bundle.upload_time.asc())
+        .all()
+    )
+    health_history = []
+    for b in company_bundles:
+        findings = db.query(Finding).filter(Finding.bundle_id == b.id).all()
+        critical = len([f for f in findings if f.severity == "critical"])
+        high = len([f for f in findings if f.severity == "high"])
+        health_score = max(0, 100 - critical * 25 - high * 10 - len(findings) * 3)
+        health_history.append({
+            "date": b.upload_time.isoformat() if b.upload_time else None,
+            "health_score": health_score,
+            "bundle_id": b.id,
+            "bundle_name": b.ai_name or b.filename,
+        })
+
     return {
         "id": company.id,
         "name": company.name,
         "slug": company.slug,
         "tier": company.tier,
         "projects": projects_data,
+        "health_history": health_history,
     }
 
 

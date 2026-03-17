@@ -12,22 +12,36 @@ import AnalysisVersionHistory from '@/components/AnalysisVersionHistory';
 import ClusterProfile from '@/components/ClusterProfile';
 import ConfidenceExplainer from '@/components/ConfidenceExplainer';
 import FindingCard from '@/components/FindingCard';
+import type { SummaryData } from '@/components/ClusterHealthGauge';
+import type { Finding } from '@/lib/api';
+import type { TimelineEvent } from '@/components/IncidentTimeline';
+import type { CorrelationNode, CorrelationEdge } from '@/components/CorrelationGraph';
+import type { Playbook } from '@/components/RemediationPlaybook';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 const TABS = ['Overview', 'Findings', 'Timeline', 'Correlations', 'Playbook', 'Export', 'Ask AI', 'History'];
+
+interface BundleMeta {
+  filename?: string;
+  status?: string;
+  detail?: string;
+}
+interface PriorityActionType {
+  action?: string;
+}
 
 export default function BundleDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params?.id as string;
-  const [bundle, setBundle] = useState<any>(null);
-  const [findings, setFindings] = useState<any[]>([]);
-  const [summary, setSummary] = useState<any>(null);
-  const [timeline, setTimeline] = useState<any[]>([]);
-  const [correlations, setCorrelations] = useState<any>({ nodes: [], edges: [] });
-  const [playbook, setPlaybook] = useState<any[]>([]);
+  const [bundle, setBundle] = useState<BundleMeta | null>(null);
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [summary, setSummary] = useState<SummaryData | null>(null);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [correlations, setCorrelations] = useState<{ nodes: CorrelationNode[]; edges: CorrelationEdge[] }>({ nodes: [], edges: [] });
+  const [playbook, setPlaybook] = useState<Playbook[]>([]);
   const [loading, setLoading] = useState(true);
-  const [priorityAction, setPriorityAction] = useState<any>(null);
+  const [priorityAction, setPriorityAction] = useState<PriorityActionType | null>(null);
   const [fixScript, setFixScript] = useState<string | null>(null);
   const [scriptCopied, setScriptCopied] = useState(false);
   const [severityFilter, setSeverityFilter] = useState('all');
@@ -43,15 +57,16 @@ export default function BundleDetailPage() {
       fetch(`${API}/bundles/${id}/correlations`).then(r => r.json()).catch(() => ({ nodes: [], edges: [] })),
       fetch(`${API}/bundles/${id}/playbook`).then(r => r.json()).catch(() => ({ playbook: [] })),
     ]).then(([b, report, tl, corr, pb]) => {
-      if (!b || b.detail === 'Bundle not found') {
+      const bundleData = b as BundleMeta | null;
+      if (!bundleData || bundleData.detail === 'Bundle not found') {
         setLoading(false);
         return;
       }
-      setBundle(b);
-      setFindings(report.findings || []);
-      setTimeline(tl?.events || []);
-      setCorrelations({ nodes: corr?.nodes || [], edges: corr?.edges || [] });
-      setPlaybook(pb?.playbook || []);
+      setBundle(bundleData);
+      setFindings((report.findings || []) as Finding[]);
+      setTimeline((tl?.events || []) as TimelineEvent[]);
+      setCorrelations({ nodes: (corr?.nodes || []) as CorrelationNode[], edges: (corr?.edges || []) as CorrelationEdge[] });
+      setPlaybook((pb?.playbook || []) as Playbook[]);
       setLoading(false);
 
       fetch(`${API}/bundles/${id}/summary`)
@@ -75,18 +90,19 @@ export default function BundleDetailPage() {
           fetch(`${API}/bundles/${id}`).then(r => r.json()),
           fetch(`${API}/bundles/${id}/report`).then(r => r.json()),
         ]);
-        if (b.status === 'completed' && (report.findings || []).length > 0) {
-          setBundle(b);
-          setFindings(report.findings || []);
+        const nextBundle = b as BundleMeta;
+        if (nextBundle.status === 'completed' && (report.findings || []).length > 0) {
+          setBundle(nextBundle);
+          setFindings((report.findings || []) as Finding[]);
           clearInterval(interval);
           Promise.all([
             fetch(`${API}/bundles/${id}/timeline`).then(r => r.json()).catch(() => ({ events: [] })),
             fetch(`${API}/bundles/${id}/correlations`).then(r => r.json()).catch(() => ({ nodes: [], edges: [] })),
             fetch(`${API}/bundles/${id}/playbook`).then(r => r.json()).catch(() => ({ playbook: [] })),
           ]).then(([tl, corr, pb]) => {
-            setTimeline(tl?.events || []);
-            setCorrelations({ nodes: corr?.nodes || [], edges: corr?.edges || [] });
-            setPlaybook(pb?.playbook || []);
+            setTimeline((tl?.events || []) as TimelineEvent[]);
+            setCorrelations({ nodes: (corr?.nodes || []) as CorrelationNode[], edges: (corr?.edges || []) as CorrelationEdge[] });
+            setPlaybook((pb?.playbook || []) as Playbook[]);
           });
         }
       } catch { }
@@ -99,16 +115,6 @@ export default function BundleDetailPage() {
 
   const severityColor: Record<string, string> = { critical: '#ef4444', high: '#f59e0b', medium: '#6366f1', low: '#10b981', info: '#94a3b8' };
   const severityBg: Record<string, string> = { critical: '#fee2e2', high: '#fef3c7', medium: '#f5f3ff', low: '#f0fdf4', info: '#f8fafc' };
-
-  const formatEvidence = (ev: unknown): string => {
-    if (ev == null) return '';
-    if (Array.isArray(ev) && ev.length > 0) {
-      const first = ev[0];
-      if (typeof first === 'object' && first !== null && 'content' in first) return String((first as { content?: string }).content ?? '');
-      if (typeof first === 'object' && first !== null && 'source' in first) return String((first as { source?: string }).source ?? '');
-    }
-    return typeof ev === 'string' ? ev : JSON.stringify(ev);
-  };
 
   return (
     <div style={{ maxWidth: '960px', margin: '0 auto', padding: '32px 24px' }}>
@@ -204,7 +210,7 @@ export default function BundleDetailPage() {
             })}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '10px' }}>
-            {findings.filter(f => severityFilter === 'all' || f.severity === severityFilter).map((f: any, i: number) => (
+            {findings.filter(f => severityFilter === 'all' || f.severity === severityFilter).map((f, i) => (
               <div key={f.id || i}>
                 <FindingCard finding={{ ...f, bundle_id: f.bundle_id || id }} expanded bundleId={id} />
                 <div style={{ marginTop: '6px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -263,7 +269,7 @@ export default function BundleDetailPage() {
           <RemediationPlaybook bundleId={id} playbook={playbook} />
         </div>
       )}
-      {activeTab === 'Export' && <ExportReport bundleId={id} filename={bundle.filename} />}
+      {activeTab === 'Export' && <ExportReport bundleId={id} filename={bundle.filename ?? ''} />}
       {activeTab === 'Ask AI' && <BundleChat bundleId={id} />}
       {activeTab === 'History' && (
         <AnalysisVersionHistory

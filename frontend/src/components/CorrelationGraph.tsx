@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react';
 
-interface Node {
+export interface CorrelationNode {
   id: string;
   title: string;
   severity: string;
@@ -13,11 +13,14 @@ interface Node {
   recommended_actions?: string[];
 }
 
-interface Edge {
+export interface CorrelationEdge {
   source: string;
   target: string;
   type: string;
 }
+
+type Node = CorrelationNode;
+type Edge = CorrelationEdge;
 
 const SEV_COLOR: Record<string, string> = {
   critical: '#ef4444',
@@ -37,12 +40,10 @@ const SEV_BG: Record<string, string> = {
 const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
 
 // Client-side edge explanation lookup (keyword pairs → explanation)
-function getEdgeExplanation(titleA: string, titleB: string, type: string): string {
+function getEdgeExplanation(titleA: string, titleB: string): string {
   const a = titleA.toLowerCase();
   const b = titleB.toLowerCase();
   const has = (...keywords: string[]) => keywords.some((k) => a.includes(k) || b.includes(k));
-  const both = (k: string) => a.includes(k) && b.includes(k);
-  const one = (k: string) => a.includes(k) || b.includes(k);
   if (has('oom', 'oomkill', 'oomkilled') && has('crash', 'crashloop', 'backoff')) return 'Memory exhaustion killed the container, triggering restart loops.';
   if (has('oom', 'oomkill') && has('memory', 'pressure')) return 'Both findings share the same memory pressure root cause.';
   if (has('crash', 'crashloop', 'backoff') && has('restart')) return 'Repeated crashes triggered Kubernetes restart backoff.';
@@ -56,9 +57,11 @@ function getEdgeExplanation(titleA: string, titleB: string, type: string): strin
 
 function truncate(str: string, n: number) {
   const words = str.split(' ');
-  if (words.length <= 3) return str;
-  return words.slice(0, 3).join(' ') + '...';
+  if (words.length <= n) return str;
+  return words.slice(0, n).join(' ') + '...';
 }
+
+type FindingLookupItem = { id: string; title?: string; summary?: string; root_cause?: string; impact?: string; recommended_actions?: string[] };
 
 export default function CorrelationGraph({
   bundleId,
@@ -70,7 +73,7 @@ export default function CorrelationGraph({
   bundleId: string;
   nodes?: Node[];
   edges?: Edge[];
-  findings?: Array<{ id: string; title?: string; summary?: string; root_cause?: string; impact?: string; recommended_actions?: string[] }>;
+  findings?: FindingLookupItem[];
   onNavigateToFindings?: () => void;
 }) {
   const [nodes, setNodes] = useState<Node[]>(propNodes || []);
@@ -87,7 +90,7 @@ export default function CorrelationGraph({
   const containerRef = useRef<HTMLDivElement>(null);
 
   const findingsById = useMemo(() => {
-    const m: Record<string, typeof findingsLookup[0]> = {};
+    const m: Record<string, FindingLookupItem> = {};
     (findingsLookup || []).forEach((f) => { m[f.id] = f; });
     return m;
   }, [findingsLookup]);
@@ -455,7 +458,7 @@ export default function CorrelationGraph({
               >
                 <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: '6px' }}>Why are these connected?</div>
                 <p style={{ margin: 0, color: '#475569', lineHeight: 1.4 }}>
-                  {getEdgeExplanation(clickedEdge.nodeA.title, clickedEdge.nodeB.title, clickedEdge.edge.type)}
+                  {getEdgeExplanation(clickedEdge.nodeA.title, clickedEdge.nodeB.title)}
                 </p>
               </div>
             </div>

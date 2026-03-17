@@ -110,15 +110,16 @@ export default function PatternsPage() {
     fetch(`${API}/bundles`)
       .then(r => r.json())
       .then(async d => {
-        const bundles = (d.bundles || []).filter((b: any) => b.status === 'completed');
+        const bundles = (d.bundles || []).filter((b: unknown) => (b as { status?: string }).status === 'completed');
         const patternCounts: Record<string, number> = {};
         for (const bundle of bundles) {
           try {
             const report = await fetch(`${API}/bundles/${bundle.id}/report`).then(r => r.json());
             const findings = report.findings || [];
-            findings.forEach((f: any) => {
-              const titleLower = f.title?.toLowerCase() || '';
-              const descLower = (f.description || f.summary || '').toLowerCase();
+            findings.forEach((f: unknown) => {
+              const ff = f as { title?: string; description?: string; summary?: string };
+              const titleLower = ff.title?.toLowerCase() || '';
+              const descLower = (ff.description ?? ff.summary ?? '').toLowerCase();
               KNOWN_PATTERNS.forEach(p => {
                 if (p.signatures.some(s => titleLower.includes(s.toLowerCase()) || descLower.includes(s.toLowerCase()))) {
                   patternCounts[p.id] = (patternCounts[p.id] || 0) + 1;

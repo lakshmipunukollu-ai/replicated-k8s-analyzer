@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 
-interface TimelineEvent {
+export interface TimelineEvent {
   timestamp: string;
   title: string;
   description: string;

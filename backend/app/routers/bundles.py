@@ -2,14 +2,16 @@ import os
 import re
 import json
 import asyncio
+import requests as http_requests
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Bundle, Finding, AnalysisEvent, AnalysisVersion, SearchIndex, Company, Project, generate_uuid
+from app.models import Bundle, Finding, AnalysisEvent, AnalysisVersion, SearchIndex, Company, Project, SuppressionRule, generate_uuid
 from app.schemas import (
     BundleResponse, BundleListResponse, ReportResponse,
     ReportSummary, FindingResponse, AnalyzeResponse, TriageUpdate
@@ -87,6 +89,74 @@ def upload_bundle(
     db.add(bundle)
     db.commit()
     db.refresh(bundle)
+
+    return {
+        "id": bundle.id,
+        "filename": bundle.filename,
+        "file_size": bundle.file_size,
+        "status": bundle.status,
+        "upload_time": bundle.upload_time.isoformat()
+    }
+
+
+@router.post("/intake-url", status_code=201)
+def intake_bundle_from_url(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Import a bundle from a URL (e.g. presigned S3). Downloads file, creates bundle, triggers analysis."""
+    url = (body.get("url") or "").strip()
+    if not url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="URL must start with https://")
+
+    filename = (body.get("filename") or "").strip()
+    if not filename:
+        parsed = urlparse(url)
+        filename = os.path.basename(parsed.path) or "bundle.tar.gz"
+    if not (filename.endswith(".tar.gz") or filename.endswith(".tgz") or filename.endswith(".gz")):
+        filename = filename + ".tar.gz" if not filename.endswith(".gz") else filename
+
+    company_id = body.get("company_id")
+    project_id = body.get("project_id")
+    app_version = body.get("app_version")
+
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    bundle_id = generate_uuid()
+    file_path = os.path.join(settings.UPLOAD_DIR, f"{bundle_id}_{filename}")
+
+    try:
+        resp = http_requests.get(url, stream=True, timeout=30)
+        resp.raise_for_status()
+        with open(file_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        file_size = os.path.getsize(file_path)
+    except Exception as e:
+        if os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        raise HTTPException(status_code=400, detail=f"Failed to download file: {str(e)}")
+
+    bundle = Bundle(
+        id=bundle_id,
+        filename=filename,
+        file_size=file_size,
+        file_path=file_path,
+        status="uploaded",
+        upload_time=datetime.utcnow(),
+        company_id=company_id,
+        project_id=project_id,
+        app_version=app_version,
+    )
+    db.add(bundle)
+    db.commit()
+    db.refresh(bundle)
+
+    background_tasks.add_task(run_analysis, bundle_id)
 
     return {
         "id": bundle.id,
@@ -483,9 +553,17 @@ async def stream_status(bundle_id: str, db: Session = Depends(get_db)):
     )
 
 
+def _get_active_suppression_patterns(company_id: Optional[str], db: Session) -> list:
+    """Load active suppression patterns for a company (company-specific + global)."""
+    q = db.query(SuppressionRule).filter(SuppressionRule.is_active == True)
+    q = q.filter((SuppressionRule.company_id == company_id) | (SuppressionRule.company_id.is_(None)))
+    rules = q.all()
+    return [r.pattern.strip().lower() for r in rules if r.pattern]
+
+
 @router.get("/{bundle_id}/report", response_model=ReportResponse)
 def get_report(bundle_id: str, db: Session = Depends(get_db)):
-    """Get full analysis report for a bundle."""
+    """Get full analysis report for a bundle. Suppressed findings are excluded."""
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
@@ -494,12 +572,25 @@ def get_report(bundle_id: str, db: Session = Depends(get_db)):
         Finding.bundle_id == bundle_id
     ).all()
 
+    # Apply suppression: exclude findings whose title matches any active rule (case-insensitive)
+    patterns = _get_active_suppression_patterns(bundle.company_id, db)
+    if patterns:
+        visible = []
+        for f in findings:
+            title_lower = (f.title or "").lower()
+            if not any(p in title_lower for p in patterns):
+                visible.append(f)
+        suppressed_count = len(findings) - len(visible)
+        findings = visible
+    else:
+        suppressed_count = 0
+
     # Calculate duration
     duration = None
     if bundle.analysis_start and bundle.analysis_end:
         duration = (bundle.analysis_end - bundle.analysis_start).total_seconds()
 
-    # Build severity and category counts
+    # Build severity and category counts from visible findings only
     severity_counts = {}
     category_counts = {}
     for f in findings:
@@ -536,10 +627,126 @@ def get_report(bundle_id: str, db: Session = Depends(get_db)):
             total_findings=len(findings),
             by_severity=severity_counts,
             by_category=category_counts,
-            analysis_duration_seconds=duration
+            analysis_duration_seconds=duration,
+            suppressed_count=suppressed_count,
         ),
         findings=finding_responses
     )
+
+
+@router.get("/{bundle_id}/customer-report")
+def get_customer_report(bundle_id: str, db: Session = Depends(get_db)):
+    """Return a clean HTML report for the customer. No internal notes, annotations, or confidence."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    patterns = _get_active_suppression_patterns(bundle.company_id, db)
+    if patterns:
+        findings = [f for f in findings if not any(p in (f.title or "").lower() for p in patterns)]
+
+    severity_order = ["critical", "high", "medium", "low", "info"]
+    findings_sorted = sorted(findings, key=lambda f: severity_order.index(f.severity) if f.severity in severity_order else 99)
+
+    critical = len([f for f in findings if f.severity == "critical"])
+    high = len([f for f in findings if f.severity == "high"])
+    health_score = max(0, 100 - critical * 25 - high * 10 - len(findings) * 3)
+    health_color = "#10b981" if health_score >= 70 else "#f59e0b" if health_score >= 40 else "#ef4444"
+
+    summary_text = bundle.summary or (
+        f"This report summarizes {len(findings)} finding(s) from the Kubernetes support bundle. "
+        f"Cluster health score is {health_score}/100. "
+        + ("Address critical and high severity items first." if critical or high else "No critical or high severity issues were identified.")
+    )
+
+    profile = bundle.cluster_profile or {}
+    k8s_version = profile.get("k8s_version") or "N/A"
+    node_count = profile.get("node_count") or "N/A"
+    provider = profile.get("cloud_provider") or "N/A"
+
+    all_actions = []
+    for f in findings_sorted:
+        for a in (f.recommended_actions or []):
+            if a and a not in all_actions:
+                all_actions.append(a)
+    next_steps = all_actions[:3]
+
+    findings_html = ""
+    for f in findings_sorted:
+        actions_list = "".join(f"<li>{a}</li>" for a in (f.recommended_actions or [])[:5])
+        findings_html += f"""
+        <div style="margin-bottom: 1.25rem; padding: 1rem; background: #f8fafc; border-radius: 8px; border-left: 4px solid {'#ef4444' if f.severity == 'critical' else '#f59e0b' if f.severity == 'high' else '#6366f1' if f.severity == 'medium' else '#64748b'};">
+          <h3 style="margin: 0 0 0.5rem 0; font-size: 1rem;">{f.title or 'Finding'}</h3>
+          <p style="margin: 0 0 0.5rem 0; font-size: 0.875rem; color: #475569;">{f.summary or ''}</p>
+          <p style="margin: 0 0 0.5rem 0; font-size: 0.875rem;"><strong>Impact:</strong> {f.impact or 'N/A'}</p>
+          <p style="margin: 0; font-size: 0.875rem;"><strong>Recommended actions:</strong></p>
+          <ul style="margin: 0.25rem 0 0 1.25rem; font-size: 0.875rem;">{actions_list or '<li>None specified</li>'}</ul>
+        </div>
+        """
+
+    next_steps_html = "".join(f"<li>{a}</li>" for a in next_steps) if next_steps else "<li>Review findings above and address by priority.</li>"
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kubernetes Cluster Health Report — {bundle.filename}</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, sans-serif; line-height: 1.5; color: #1e293b; max-width: 720px; margin: 0 auto; padding: 2rem; background: #fff; }}
+    .header {{ border-bottom: 1px solid #e2e8f0; padding-bottom: 1rem; margin-bottom: 1.5rem; }}
+    .logo {{ width: 120px; height: 40px; background: #f1f5f9; border-radius: 6px; margin-bottom: 0.5rem; }}
+    h1 {{ font-size: 1.5rem; margin: 0 0 0.25rem 0; }}
+    .meta {{ font-size: 0.875rem; color: #64748b; }}
+    .score {{ font-size: 2.5rem; font-weight: 700; margin: 1rem 0; }}
+    .profile p {{ margin: 0.25rem 0; font-size: 0.875rem; }}
+    .footer {{ margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; font-size: 0.75rem; color: #94a3b8; }}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo"></div>
+    <h1>Kubernetes Cluster Health Report</h1>
+    <p class="meta">Date: {datetime.utcnow().strftime('%Y-%m-%d')} · Bundle: {bundle.filename}</p>
+  </div>
+
+  <section style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.125rem; margin-bottom: 0.5rem;">Executive Summary</h2>
+    <p style="font-size: 0.9375rem; color: #475569;">{summary_text}</p>
+  </section>
+
+  <section style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.125rem; margin-bottom: 0.5rem;">Cluster Profile</h2>
+    <div class="profile">
+      <p><strong>Kubernetes version:</strong> {k8s_version}</p>
+      <p><strong>Nodes:</strong> {node_count}</p>
+      <p><strong>Provider:</strong> {provider}</p>
+    </div>
+  </section>
+
+  <section style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.125rem; margin-bottom: 0.5rem;">Health Score</h2>
+    <p class="score" style="color: {health_color};">{health_score}/100</p>
+  </section>
+
+  <section style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.125rem; margin-bottom: 0.75rem;">Findings by Severity</h2>
+    {findings_html}
+  </section>
+
+  <section style="margin-bottom: 1.5rem;">
+    <h2 style="font-size: 1.125rem; margin-bottom: 0.5rem;">Next Steps</h2>
+    <ul style="font-size: 0.9375rem;">{next_steps_html}</ul>
+  </section>
+
+  <div class="footer">
+    Report generated by Kubernetes Bundle Analyzer
+  </div>
+</body>
+</html>
+"""
+    return Response(content=html, media_type="text/html")
 
 
 def _evidence_skip_path(fp: str) -> bool:
@@ -1334,3 +1541,84 @@ def export_bundle_report(bundle_id: str, body: dict, db: Session = Depends(get_d
             lines.append(f"**Evidence:** `{_evidence_str(f.evidence)}`")
             lines.append("")
         return {"type": "jira", "content": "\n".join(lines)}
+
+
+@router.post("/{bundle_id}/escalate")
+def escalate_bundle(bundle_id: str, body: dict, db: Session = Depends(get_db)):
+    """Create a GitHub (or Jira) issue from bundle findings. Defaults to critical+high if finding_ids omitted."""
+    bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    platform = body.get("platform", "github")
+    if platform != "github":
+        raise HTTPException(status_code=400, detail="Only platform=github is supported")
+
+    github_repo = (body.get("github_repo") or "").strip()
+    github_token = (body.get("github_token") or "").strip()
+    if not github_repo or not github_token:
+        raise HTTPException(status_code=400, detail="github_repo and github_token are required for GitHub")
+
+    finding_ids = body.get("finding_ids")
+    all_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
+    if finding_ids is not None and len(finding_ids) > 0:
+        id_set = set(finding_ids)
+        findings = [f for f in all_findings if f.id in id_set]
+    else:
+        findings = [f for f in all_findings if f.severity in ("critical", "high")]
+
+    critical = len([f for f in findings if f.severity == "critical"])
+    high = len([f for f in findings if f.severity == "high"])
+    health_score = max(0, 100 - critical * 25 - high * 10 - len(all_findings) * 3)
+
+    title = f"[K8s Incident] {bundle.ai_name or bundle.filename}"
+
+    body_parts = [
+        "## Cluster Health: {}/100".format(health_score),
+        "## Affected Bundle: {}".format(bundle.filename),
+        "## Findings ({} total)".format(len(findings)),
+        "",
+    ]
+    for f in findings:
+        body_parts.append("### {}: {}".format(f.severity.upper(), f.title or "Finding"))
+        body_parts.append("**Root Cause:** {}".format(f.root_cause or "N/A"))
+        body_parts.append("**Impact:** {}".format(f.impact or "N/A"))
+        body_parts.append("**Recommended Actions:**")
+        for a in (f.recommended_actions or []):
+            body_parts.append("- {}".format(a))
+        body_parts.append("")
+    body_parts.append("---")
+    body_parts.append("*Generated by K8s Bundle Analyzer*")
+    issue_body = "\n".join(body_parts)
+
+    try:
+        resp = http_requests.post(
+            "https://api.github.com/repos/{}/issues".format(github_repo),
+            headers={
+                "Authorization": "token {}".format(github_token),
+                "Accept": "application/vnd.github.v3+json",
+                "Content-Type": "application/json",
+            },
+            json={
+                "title": title,
+                "body": issue_body,
+                "labels": ["incident", "kubernetes", "auto-generated"],
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "success": True,
+            "issue_url": data.get("html_url"),
+            "issue_number": data.get("number"),
+        }
+    except http_requests.HTTPError as e:
+        try:
+            err = e.response.json()
+            msg = err.get("message", str(e))
+        except Exception:
+            msg = str(e)
+        raise HTTPException(status_code=400, detail="GitHub API error: {}".format(msg))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

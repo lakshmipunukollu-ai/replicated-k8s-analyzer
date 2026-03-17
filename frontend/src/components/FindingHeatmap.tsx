@@ -20,12 +20,13 @@ export default function FindingHeatmap() {
       .then(d => {
         const bundles = d.bundles || [];
         const dayMap: Record<string, DayData> = {};
-        bundles.forEach((b: any) => {
-          const date = new Date(b.upload_time + (b.upload_time.endsWith('Z') ? '' : 'Z'))
+        bundles.forEach((b: unknown) => {
+          const bb = b as { upload_time?: string; finding_count?: number; ai_name?: string; filename?: string };
+          const date = new Date((bb.upload_time ?? '') + ((bb.upload_time ?? '').endsWith('Z') ? '' : 'Z'))
             .toISOString().split('T')[0];
           if (!dayMap[date]) dayMap[date] = { date, count: 0, bundles: [] };
-          dayMap[date].count += b.finding_count || 0;
-          dayMap[date].bundles.push(b.ai_name || b.filename);
+          dayMap[date].count += bb.finding_count || 0;
+          dayMap[date].bundles.push(bb.ai_name || bb.filename || '');
         });
         const days: DayData[] = [];
         for (let i = 83; i >= 0; i--) {

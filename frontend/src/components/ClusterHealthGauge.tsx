@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 
-interface SummaryData {
+export interface SummaryData {
   summary: string;
   health_score: number;
   critical_count: number;

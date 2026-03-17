@@ -7,38 +7,54 @@ interface DataPoint {
   name: string;
   health_score: number;
   date: string;
-  finding_count: number;
+  finding_count?: number;
+}
+
+interface HealthTrendChartProps {
+  healthHistory?: { date: string; health_score: number; bundle_id: string; bundle_name: string }[];
 }
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
-export default function HealthTrendChart() {
+export default function HealthTrendChart({ healthHistory }: HealthTrendChartProps = {}) {
   const [points, setPoints] = useState<DataPoint[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!healthHistory?.length);
   const [hovered, setHovered] = useState<DataPoint | null>(null);
   const router = useRouter();
 
   useEffect(() => {
+    if (healthHistory && healthHistory.length > 0) {
+      const pts: DataPoint[] = healthHistory.map((h) => ({
+        bundle_id: h.bundle_id,
+        name: h.bundle_name,
+        health_score: h.health_score,
+        date: h.date ? new Date(h.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '',
+      }));
+      setPoints(pts);
+      setLoading(false);
+      return;
+    }
     fetch(`${API}/bundles`)
       .then(r => r.json())
       .then(d => {
-        const bundles = (d.bundles || []).filter((b: any) => b.status === 'completed');
-        const pts = bundles.map((b: any) => {
-          const score = Math.max(0, 100 - (b.finding_count || 0) * 12);
+        const bundles = (d.bundles || []).filter((b: unknown) => (b as { status?: string }).status === 'completed');
+        const pts = bundles.map((b: unknown) => {
+          const bb = b as { id: string; upload_time?: string; finding_count?: number; ai_name?: string; filename?: string };
+          const score = Math.max(0, 100 - (bb.finding_count || 0) * 12);
           return {
-            bundle_id: b.id,
-            name: b.ai_name || b.filename,
+            bundle_id: bb.id,
+            name: bb.ai_name || bb.filename || '',
             health_score: score,
-            date: new Date(b.upload_time + (b.upload_time.endsWith('Z') ? '' : 'Z'))
+            date: new Date((bb.upload_time ?? '') + ((bb.upload_time ?? '').endsWith('Z') ? '' : 'Z'))
               .toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-            finding_count: b.finding_count || 0,
+            finding_count: bb.finding_count || 0,
           };
         }).reverse();
         setPoints(pts);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, []);
+  }, [healthHistory]);
 
   if (loading || points.length < 2) return null;
 
@@ -108,15 +124,16 @@ export default function HealthTrendChart() {
             const i = points.findIndex(p => p.bundle_id === hovered.bundle_id);
             const x = xScale(i);
             const y = yScale(hovered.health_score);
+            const label = `${hovered.name} · ${hovered.date}`;
             return (
               <g>
-                <rect x={x - 70} y={y - 44} width="140" height="36" rx="4"
+                <rect x={x - 80} y={y - 52} width="160" height="44" rx="4"
                   fill="#1e293b" />
-                <text x={x} y={y - 30} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#fff">
+                <text x={x} y={y - 34} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#fff">
                   {hovered.health_score}/100
                 </text>
-                <text x={x} y={y - 18} textAnchor="middle" fontSize="9" fill="#94a3b8">
-                  {hovered.name.length > 22 ? hovered.name.slice(0, 22) + '...' : hovered.name}
+                <text x={x} y={y - 20} textAnchor="middle" fontSize="9" fill="#94a3b8">
+                  {label.length > 28 ? label.slice(0, 28) + '...' : label}
                 </text>
               </g>
             );

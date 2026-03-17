@@ -61,6 +61,7 @@ class ReportSummary(BaseModel):
     by_severity: dict
     by_category: dict
     analysis_duration_seconds: Optional[float] = None
+    suppressed_count: int = 0
 
 
 class ReportResponse(BaseModel):

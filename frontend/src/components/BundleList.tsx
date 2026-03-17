@@ -36,7 +36,7 @@ const formatTime = (ts: string) => {
   });
 };
 
-function HealthBar({ bundleId, findingCount }: { bundleId: string; findingCount: number }) {
+function HealthBar({ findingCount }: { bundleId: string; findingCount: number }) {
   const score = Math.max(0, 100 - findingCount * 12);
   const color = score >= 70 ? '#10b981' : score >= 40 ? '#f59e0b' : '#ef4444';
   return (
