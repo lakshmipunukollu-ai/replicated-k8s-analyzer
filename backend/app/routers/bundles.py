@@ -33,6 +33,13 @@ _s3 = S3Service()
 router = APIRouter(prefix="/bundles", tags=["bundles"])
 
 
+def _assert_company_user_bundle_access(bundle: Bundle, current_user: Optional[User]) -> None:
+    """Company users may only access bundles assigned to their company."""
+    if current_user and current_user.role == "company_user":
+        if not current_user.company_id or bundle.company_id != current_user.company_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+
 def _evidence_str(evidence) -> str:
     if not evidence:
         return ""
@@ -302,8 +309,12 @@ def delete_bundle(bundle_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/search")
-def search_findings(q: str, db: Session = Depends(get_db)):
-    """Search across all bundle findings."""
+def search_findings(
+    q: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """Search across bundle findings. Company users only see their company's bundles."""
     if not q or len(q) < 2:
         return {"query": q, "results": [], "total": 0}
 
@@ -312,10 +323,17 @@ def search_findings(q: str, db: Session = Depends(get_db)):
 
     all_findings = db.query(Finding).all()
     results = []
+    company_scope = None
+    if current_user and current_user.role == "company_user":
+        if not current_user.company_id:
+            return {"query": q, "results": [], "total": 0}
+        company_scope = current_user.company_id
 
     for finding in all_findings:
         bundle = db.query(Bundle).filter(Bundle.id == finding.bundle_id).first()
         if not bundle or bundle.status != "completed":
+            continue
+        if company_scope is not None and bundle.company_id != company_scope:
             continue
 
         searchable = f"{finding.title} {finding.summary or ''} {finding.root_cause or ''}".lower()
@@ -661,11 +679,16 @@ def _get_active_suppression_patterns(company_id: Optional[str], db: Session) -> 
 
 
 @router.get("/{bundle_id}/report", response_model=ReportResponse)
-def get_report(bundle_id: str, db: Session = Depends(get_db)):
+def get_report(
+    bundle_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
     """Get full analysis report for a bundle. Suppressed findings are excluded."""
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    _assert_company_user_bundle_access(bundle, current_user)
 
     findings = db.query(Finding).filter(
         Finding.bundle_id == bundle_id
@@ -1324,11 +1347,16 @@ def get_analysis_versions(bundle_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{bundle_id}/similar")
-def get_similar_bundles(bundle_id: str, db: Session = Depends(get_db)):
+def get_similar_bundles(
+    bundle_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
     """Find similar bundles using hybrid keyword + semantic matching."""
     bundle = db.query(Bundle).filter(Bundle.id == bundle_id).first()
     if not bundle:
         raise HTTPException(status_code=404, detail="Bundle not found")
+    _assert_company_user_bundle_access(bundle, current_user)
 
     current_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
     if not current_findings:
@@ -1338,10 +1366,13 @@ def get_similar_bundles(bundle_id: str, db: Session = Depends(get_db)):
     current_cats = set(f.category for f in current_findings if f.category)
     current_sevs = set(f.severity for f in current_findings)
 
-    other_bundles = db.query(Bundle).filter(
+    other_q = db.query(Bundle).filter(
         Bundle.id != bundle_id,
-        Bundle.status == "completed"
-    ).all()
+        Bundle.status == "completed",
+    )
+    if current_user and current_user.role == "company_user" and current_user.company_id:
+        other_q = other_q.filter(Bundle.company_id == current_user.company_id)
+    other_bundles = other_q.all()
 
     results = []
     for other in other_bundles:
