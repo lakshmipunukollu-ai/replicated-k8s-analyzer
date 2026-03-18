@@ -50,9 +50,8 @@ function HealthBar({ findingCount }: { bundleId: string; findingCount: number })
   );
 }
 
-function BundleActions({ bundleId, onDelete, onArchive, onRestore, onDeleteClick, isArchivedView }: {
+function BundleActions({ bundleId, onArchive, onRestore, onDeleteClick, isArchivedView }: {
   bundleId: string;
-  onDelete: () => void;
   onArchive: () => void;
   onRestore: () => void;
   onDeleteClick: () => void;
@@ -213,7 +212,6 @@ export default function BundleList({ companyId, projectId, includeArchived }: { 
             {hoveredId === bundle.id && (
               <BundleActions
                 bundleId={bundle.id}
-                onDelete={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
                 onArchive={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
                 onRestore={() => setBundles(prev => prev.filter(b => b.id !== bundle.id))}
                 onDeleteClick={() => setDeleteModalBundle(bundle)}
