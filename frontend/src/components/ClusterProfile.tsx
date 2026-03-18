@@ -10,6 +10,7 @@ interface Profile {
   findings_summary: string | null;
 }
 
+import { getAuthHeaders } from '@/lib/api';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 const PROVIDER_COLORS: Record<string, { bg: string; color: string }> = {
@@ -19,16 +20,28 @@ const PROVIDER_COLORS: Record<string, { bg: string; color: string }> = {
   'Unknown': { bg: '#f1f5f9', color: '#475569' },
 };
 
-export default function ClusterProfile({ bundleId }: { bundleId: string }) {
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+export default function ClusterProfile({
+  bundleId,
+  prefetched,
+}: {
+  bundleId: string;
+  /** When set (including null), skip fetch — data loaded by parent. */
+  prefetched?: Profile | null;
+}) {
+  const [profile, setProfile] = useState<Profile | null>(prefetched ?? null);
+  const [loading, setLoading] = useState(prefetched === undefined);
 
   useEffect(() => {
-    fetch(`${API}/bundles/${bundleId}/cluster-profile`)
+    if (prefetched !== undefined) {
+      setProfile(prefetched);
+      setLoading(false);
+      return;
+    }
+    fetch(`${API}/bundles/${bundleId}/cluster-profile`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => { setProfile(d.profile); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [bundleId]);
+  }, [bundleId, prefetched]);
 
   if (loading) return (
     <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px 18px' }}>

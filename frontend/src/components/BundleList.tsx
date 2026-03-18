@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuthHeaders } from '@/lib/api';
 
 interface Bundle {
   id: string;
@@ -59,13 +60,13 @@ function BundleActions({ bundleId, onDelete, onArchive, onRestore, onDeleteClick
 }) {
   const handleArchive = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await fetch(`${API}/bundles/${bundleId}/archive`, { method: 'PATCH' }).catch(() => {});
+    await fetch(`${API}/bundles/${bundleId}/archive`, { method: 'PATCH', headers: getAuthHeaders() }).catch(() => {});
     onArchive();
   };
 
   const handleRestore = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await fetch(`${API}/bundles/${bundleId}/restore`, { method: 'PATCH' }).catch(() => {});
+    await fetch(`${API}/bundles/${bundleId}/restore`, { method: 'PATCH', headers: getAuthHeaders() }).catch(() => {});
     onRestore();
   };
 
@@ -98,7 +99,7 @@ function AiName({ bundleId, filename }: { bundleId: string; filename: string }) 
   const [name, setName] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/bundles/${bundleId}/ai-name`)
+    fetch(`${API}/bundles/${bundleId}/ai-name`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => setName(d.ai_name))
       .catch(() => {});
@@ -129,7 +130,7 @@ export default function BundleList({ companyId, projectId, includeArchived }: { 
     if (includeArchived) params.set('include_archived', 'true');
     const qs = params.toString();
     const url = `${API}/bundles${qs ? `?${qs}` : ''}`;
-    fetch(url)
+    fetch(url, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => setBundles(d?.bundles ?? []))
       .catch(() => setBundles([]))
@@ -148,7 +149,7 @@ export default function BundleList({ companyId, projectId, includeArchived }: { 
     if (!deleteModalBundle) return;
     setDeleting(true);
     try {
-      await fetch(`${API}/bundles/${deleteModalBundle.id}`, { method: 'DELETE' });
+      await fetch(`${API}/bundles/${deleteModalBundle.id}`, { method: 'DELETE', headers: getAuthHeaders() });
       setBundles(prev => prev.filter(b => b.id !== deleteModalBundle.id));
       setDeleteModalBundle(null);
     } finally {

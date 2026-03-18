@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import HealthTrendChart from '@/components/HealthTrendChart';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -61,7 +62,7 @@ export default function CompanyDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    fetch(`${API}/companies/${id}`)
+    fetch(`${API}/companies/${id}`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then(setCompany)
       .catch(() => setCompany(null))
@@ -69,7 +70,7 @@ export default function CompanyDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    fetch(`${API}/patterns/app-version-correlation`)
+    fetch(`${API}/patterns/app-version-correlation`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => setVersionCorrelations(data.correlations || []))
       .catch(() => setVersionCorrelations([]));
@@ -82,7 +83,7 @@ export default function CompanyDetailPage() {
       return;
     }
     setBundlesLoading(true);
-    fetch(`${API}/projects/${selectedProjectId}/bundles`)
+    fetch(`${API}/projects/${selectedProjectId}/bundles`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => { setProjectBundles(Array.isArray(data) ? data : []); setBundlesLoading(false); })
       .catch(() => { setProjectBundles([]); setBundlesLoading(false); });
@@ -92,7 +93,7 @@ export default function CompanyDetailPage() {
     if (!company) return;
     setDeletingCompany(true);
     try {
-      await fetch(`${API}/companies/${id}`, { method: 'DELETE' });
+      await fetch(`${API}/companies/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
       router.push('/companies');
     } finally {
       setDeletingCompany(false);
@@ -103,7 +104,7 @@ export default function CompanyDetailPage() {
     if (!deleteProjectModal) return;
     setDeletingProject(true);
     try {
-      await fetch(`${API}/companies/${id}/projects/${deleteProjectModal.id}`, { method: 'DELETE' });
+      await fetch(`${API}/companies/${id}/projects/${deleteProjectModal.id}`, { method: 'DELETE', headers: getAuthHeaders() });
       setCompany((prev) => prev ? { ...prev, projects: prev.projects.filter((p) => p.id !== deleteProjectModal.id) } : null);
       setDeleteProjectModal(null);
       if (selectedProjectId === deleteProjectModal.id) setSelectedProjectId(null);
@@ -118,7 +119,7 @@ export default function CompanyDetailPage() {
     try {
       const res = await fetch(`${API}/companies/${id}/projects`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newProjectName.trim(), app_version: newAppVersion.trim() || undefined }),
       });
       if (!res.ok) throw new Error('Failed');

@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuthHeaders } from '@/lib/api';
 
 interface DataPoint {
   bundle_id: string;
@@ -34,13 +35,13 @@ export default function HealthTrendChart({ healthHistory }: HealthTrendChartProp
       setLoading(false);
       return;
     }
-    fetch(`${API}/bundles`)
+    fetch(`${API}/bundles`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => {
         const bundles = (d.bundles || []).filter((b: unknown) => (b as { status?: string }).status === 'completed');
         const pts = bundles.map((b: unknown) => {
-          const bb = b as { id: string; upload_time?: string; finding_count?: number; ai_name?: string; filename?: string };
-          const score = Math.max(0, 100 - (bb.finding_count || 0) * 12);
+          const bb = b as { id: string; upload_time?: string; finding_count?: number; health_score?: number | null; ai_name?: string; filename?: string };
+          const score = bb.health_score != null ? bb.health_score : 100;
           return {
             bundle_id: bb.id,
             name: bb.ai_name || bb.filename || '',

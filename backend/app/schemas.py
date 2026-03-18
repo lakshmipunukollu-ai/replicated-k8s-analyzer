@@ -13,6 +13,7 @@ class BundleResponse(BaseModel):
     analysis_end: Optional[datetime] = None
     error_message: Optional[str] = None
     finding_count: int = 0
+    health_score: Optional[int] = None
     company_id: Optional[str] = None
     project_id: Optional[str] = None
     company_name: Optional[str] = None

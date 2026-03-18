@@ -1,0 +1,27 @@
+# Misconfigured deployment: references a non-existent Secret (missing-secret).
+# Use to create a broken cluster scenario for testing the bundle analyzer.
+# Apply: kubectl apply --context kind-broken-cluster -f manifests/misconfigured-app-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: misconfigured-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: misconfigured-app
+  template:
+    metadata:
+      labels:
+        app: misconfigured-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:latest
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: missing-secret
+              key: url

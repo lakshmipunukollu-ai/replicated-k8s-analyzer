@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 const API_COMPANIES = `${API}/companies`;
@@ -25,25 +27,27 @@ export default function BundleUpload() {
   const [intakeUrl, setIntakeUrl] = useState('');
   const [intakeFilename, setIntakeFilename] = useState('');
   const router = useRouter();
+  const { token } = useAuth();
 
   useEffect(() => {
-    fetch(API_COMPANIES)
+    if (!token) return;
+    fetch(API_COMPANIES, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => setCompanies(Array.isArray(data) ? data : []))
       .catch(() => {});
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     setProjectId('');
-    if (!companyId) {
+    if (!companyId || !token) {
       setProjects([]);
       return;
     }
-    fetch(`${API}/companies/${companyId}`)
+    fetch(`${API}/companies/${companyId}`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => setProjects(data?.projects || []))
       .catch(() => setProjects([]));
-  }, [companyId]);
+  }, [companyId, token]);
 
   const handleFile = useCallback(async (file: File) => {
     if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz') && !file.name.endsWith('.gz')) {
@@ -62,6 +66,7 @@ export default function BundleUpload() {
       if (appVersion.trim()) formData.append('app_version', appVersion.trim());
       const res = await fetch(`${API}/bundles/upload`, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: formData,
       });
       if (!res.ok) throw new Error('Upload failed');
@@ -74,7 +79,7 @@ export default function BundleUpload() {
       }
 
       const bundleId = data.id;
-      await fetch(`${API}/bundles/${bundleId}/analyze`, { method: 'POST' }).catch(() => {});
+      await fetch(`${API}/bundles/${bundleId}/analyze`, { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
       router.push(`/bundles/${bundleId}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed');
@@ -113,7 +118,7 @@ export default function BundleUpload() {
     try {
       const res = await fetch(`${API}/bundles/intake-url`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url,
           filename: intakeFilename.trim() || undefined,
@@ -337,7 +342,7 @@ export default function BundleUpload() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               onClick={async () => {
-                await fetch(`${API}/bundles/${duplicateWarning.newBundleId}/analyze`, { method: 'POST' }).catch(() => {});
+                await fetch(`${API}/bundles/${duplicateWarning.newBundleId}/analyze`, { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
                 router.push(`/bundles/${duplicateWarning.newBundleId}`);
               }}
               style={{ padding: '7px 14px', background: '#1e3a5f', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}

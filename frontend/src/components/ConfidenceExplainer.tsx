@@ -14,6 +14,7 @@ interface Props {
   confidence: number;
 }
 
+import { getAuthHeaders } from '@/lib/api';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 export default function ConfidenceExplainer({ bundleId, findingId, confidence }: Props) {
@@ -27,7 +28,7 @@ export default function ConfidenceExplainer({ bundleId, findingId, confidence }:
     if (data) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API}/bundles/${bundleId}/findings/${findingId}/confidence`);
+      const res = await fetch(`${API}/bundles/${bundleId}/findings/${findingId}/confidence`, { headers: getAuthHeaders() });
       const d = await res.json();
       setData(d);
     } finally { setLoading(false); }

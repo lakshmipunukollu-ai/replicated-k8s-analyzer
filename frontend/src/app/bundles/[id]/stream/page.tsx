@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import LiveAnalysis from '@/components/LiveAnalysis';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -13,7 +14,7 @@ export default function StreamPage() {
 
   useEffect(() => {
     if (!id) return;
-    fetch(`${API}/bundles/${id}`)
+    fetch(`${API}/bundles/${id}`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(b => {
         if (b.status === 'completed') {

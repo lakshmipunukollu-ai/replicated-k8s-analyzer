@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import SeverityBadge from './SeverityBadge';
 import { Finding } from '@/lib/api';
 
+import { getAuthHeaders } from '@/lib/api';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 const ANNOTATION_TYPES = ['note', 'action_taken', 'customer_update'] as const;
 const EVIDENCE_HIGHLIGHT_KEYWORDS = [
@@ -65,7 +66,7 @@ export default function FindingCard({ finding, expanded = false, bundleId: propB
   const loadAnnotations = useCallback(() => {
     if (!bundleId || !finding.id) return;
     setLoading(true);
-    fetch(`${API}/bundles/${bundleId}/findings/${finding.id}/annotations`)
+    fetch(`${API}/bundles/${bundleId}/findings/${finding.id}/annotations`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => setAnnotations(Array.isArray(data) ? data : []))
       .catch(() => setAnnotations([]))
@@ -82,7 +83,7 @@ export default function FindingCard({ finding, expanded = false, bundleId: propB
     const body = { author, content: newContent.trim(), annotation_type: newType };
     fetch(`${API}/bundles/${bundleId}/findings/${finding.id}/annotations`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
       .then((r) => r.json())
@@ -96,7 +97,7 @@ export default function FindingCard({ finding, expanded = false, bundleId: propB
   };
 
   const handleDelete = (annotationId: string) => {
-    fetch(`${API}/annotations/${annotationId}`, { method: 'DELETE' })
+    fetch(`${API}/annotations/${annotationId}`, { method: 'DELETE', headers: getAuthHeaders() })
       .then(() => setAnnotations((prev) => prev.filter((a) => a.id !== annotationId)))
       .catch(() => {});
   };
@@ -112,7 +113,7 @@ export default function FindingCard({ finding, expanded = false, bundleId: propB
     if (evidenceContent[path] !== undefined) return;
     setEvidenceLoading((prev) => ({ ...prev, [path]: true }));
     setEvidenceError((prev) => ({ ...prev, [path]: false }));
-    fetch(`${API}/bundles/${bundleId}/evidence?path=${encodeURIComponent(path)}`)
+    fetch(`${API}/bundles/${bundleId}/evidence?path=${encodeURIComponent(path)}`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => {
         if (d.error) {

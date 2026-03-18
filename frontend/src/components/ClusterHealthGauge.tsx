@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 export interface SummaryData {
   summary: string;
@@ -11,9 +12,23 @@ export interface SummaryData {
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
-export default function ClusterHealthGauge({ bundleId, data: propData }: { bundleId: string; data?: SummaryData | null }) {
+export default function ClusterHealthGauge({
+  bundleId,
+  data: propData,
+  skipFetch,
+  loadingGauge,
+  loadingSummary,
+}: {
+  bundleId: string;
+  data?: SummaryData | null;
+  skipFetch?: boolean;
+  /** Findings not ready — show gauge skeleton */
+  loadingGauge?: boolean;
+  /** Summary text not ready — show AI summary skeleton */
+  loadingSummary?: boolean;
+}) {
   const [data, setData] = useState<SummaryData | null>(propData ?? null);
-  const [loading, setLoading] = useState(!propData);
+  const [loading, setLoading] = useState(!propData && !skipFetch);
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
@@ -22,20 +37,24 @@ export default function ClusterHealthGauge({ bundleId, data: propData }: { bundl
       setLoading(false);
       return;
     }
-    fetch(`${API}/bundles/${bundleId}/summary`)
+    if (skipFetch) {
+      setLoading(false);
+      return;
+    }
+    fetch(`${API}/bundles/${bundleId}/summary`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => {
         setData(d);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [bundleId, propData]);
+  }, [bundleId, propData, skipFetch]);
 
   useEffect(() => {
-    if (!data) return;
+    if (!data || loadingGauge) return;
     let start = 0;
     const target = data.health_score;
-    const step = target / 60;
+    const step = Math.max(target / 60, 0.01);
     const interval = setInterval(() => {
       start += step;
       if (start >= target) {
@@ -46,7 +65,7 @@ export default function ClusterHealthGauge({ bundleId, data: propData }: { bundl
       }
     }, 16);
     return () => clearInterval(interval);
-  }, [data]);
+  }, [data, loadingGauge]);
 
   const getColor = (score: number) => {
     if (score >= 70) return '#10b981';
@@ -66,52 +85,73 @@ export default function ClusterHealthGauge({ bundleId, data: propData }: { bundl
     </div>
   );
 
-  if (!data) return null;
+  if (!data && !loadingGauge) return null;
 
-  const score = animatedScore;
-  const color = getColor(data.health_score);
+  const showGauge = data && !loadingGauge;
+  const score = showGauge ? animatedScore : 0;
+  const color = showGauge ? getColor(data!.health_score) : '#e5e7eb';
   const r = 54;
   const circ = 2 * Math.PI * r;
-  const displayDash = score === 0 ? circ : (score / 100) * circ;
+  const displayDash = showGauge && score > 0 ? (score / 100) * circ : 0;
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '20px 24px', marginBottom: '20px' }}>
-      <div style={{ display: 'flex', gap: '32px', alignItems: 'center' }}>
+    <div className="bg-white border border-gray-200 rounded-lg p-5 mb-5">
+      <div className="flex gap-8 items-center flex-wrap">
         {/* Gauge */}
-        <div style={{ textAlign: 'center' as const, flexShrink: 0 }}>
-          <svg width="140" height="140" viewBox="0 0 140 140">
-            <circle cx="70" cy="70" r={r} fill="none" stroke="#f1f5f9" strokeWidth="12" />
-            <circle cx="70" cy="70" r={r} fill="none" stroke={score === 0 ? '#ef4444' : color} strokeWidth="12"
-              strokeDasharray={`${displayDash} ${circ}`}
-              strokeLinecap="round"
-              transform="rotate(-90 70 70)"
-              style={{ transition: 'stroke-dashoffset 0.05s linear' }}
-            />
-            <text x="70" y="62" textAnchor="middle" fontSize="28" fontWeight="700" fill={color}>{score}</text>
-            <text x="70" y="78" textAnchor="middle" fontSize="11" fill="#94a3b8">/100</text>
-            <text x="70" y="96" textAnchor="middle" fontSize="12" fontWeight="600" fill={color}>{getLabel(data.health_score)}</text>
-          </svg>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b', marginTop: '4px' }}>Cluster Health</div>
+        <div className="text-center shrink-0">
+          {loadingGauge || !data ? (
+            <div className="h-24 w-24 rounded-full bg-gray-200 animate-pulse mx-auto" style={{ marginTop: '10px', marginBottom: '10px' }} />
+          ) : (
+            <svg width="140" height="140" viewBox="0 0 140 140">
+              <circle cx="70" cy="70" r={r} fill="none" stroke="#f1f5f9" strokeWidth="12" />
+              <circle cx="70" cy="70" r={r} fill="none" stroke={score === 0 ? '#ef4444' : color} strokeWidth="12"
+                strokeDasharray={`${displayDash} ${circ}`}
+                strokeLinecap="round"
+                transform="rotate(-90 70 70)"
+                style={{ transition: 'stroke-dashoffset 0.05s linear' }}
+              />
+              <text x="70" y="62" textAnchor="middle" fontSize="28" fontWeight="700" fill={color}>{score}</text>
+              <text x="70" y="78" textAnchor="middle" fontSize="11" fill="#94a3b8">/100</text>
+              <text x="70" y="96" textAnchor="middle" fontSize="12" fontWeight="600" fill={color}>{getLabel(data.health_score)}</text>
+            </svg>
+          )}
+          <div className="text-xs font-semibold text-gray-500 mt-1">Cluster Health</div>
         </div>
 
         {/* Stats */}
-        <div style={{ display: 'flex', gap: '16px', flexShrink: 0 }}>
-          {[
-            { label: 'Critical', value: data.critical_count, color: '#ef4444', bg: '#fef2f2' },
-            { label: 'High', value: data.high_count, color: '#f59e0b', bg: '#fffbeb' },
-            { label: 'Total', value: data.total_findings, color: '#6366f1', bg: '#f5f3ff' },
-          ].map(s => (
-            <div key={s.label} style={{ background: s.bg, borderRadius: '8px', padding: '12px 16px', textAlign: 'center' as const, minWidth: '64px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 700, color: s.color }}>{s.value}</div>
-              <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>{s.label}</div>
-            </div>
-          ))}
+        <div className="flex gap-4 shrink-0">
+          {loadingGauge || !data ? (
+            <>
+              <div className="h-[72px] w-[72px] rounded-lg bg-gray-200 animate-pulse" />
+              <div className="h-[72px] w-[72px] rounded-lg bg-gray-200 animate-pulse" />
+              <div className="h-[72px] w-[72px] rounded-lg bg-gray-200 animate-pulse" />
+            </>
+          ) : (
+            [
+              { label: 'Critical', value: data.critical_count, color: '#ef4444', bg: '#fef2f2' },
+              { label: 'High', value: data.high_count, color: '#f59e0b', bg: '#fffbeb' },
+              { label: 'Total', value: data.total_findings, color: '#6366f1', bg: '#f5f3ff' },
+            ].map(s => (
+              <div key={s.label} style={{ background: s.bg, borderRadius: '8px', padding: '12px 16px', textAlign: 'center' as const, minWidth: '64px' }}>
+                <div style={{ fontSize: '24px', fontWeight: 700, color: s.color }}>{s.value}</div>
+                <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>{s.label}</div>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Summary */}
-        <div style={{ flex: 1, borderLeft: '1px solid #f1f5f9', paddingLeft: '24px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '8px' }}>AI Summary</div>
-          <p style={{ fontSize: '13px', color: '#374151', lineHeight: '1.7', margin: 0 }}>{data.summary}</p>
+        <div className="flex-1 min-w-[200px] border-l border-gray-100 pl-6">
+          <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">AI Summary</div>
+          {loadingSummary ? (
+            <div className="space-y-2">
+              <div className="h-4 bg-gray-200 rounded animate-pulse w-3/4 mb-2" />
+              <div className="h-4 bg-gray-200 rounded animate-pulse w-full mb-2" />
+              <div className="h-4 bg-gray-200 rounded animate-pulse w-5/6" />
+            </div>
+          ) : (
+            <p className="text-[13px] text-gray-700 leading-relaxed m-0">{data?.summary ?? ''}</p>
+          )}
         </div>
       </div>
     </div>

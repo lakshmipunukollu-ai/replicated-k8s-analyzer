@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 export interface TimelineEvent {
   timestamp: string;
@@ -23,7 +24,7 @@ export default function IncidentTimeline({ bundleId, events: propEvents }: { bun
       setLoading(false);
       return;
     }
-    fetch(`${API}/bundles/${bundleId}/timeline`)
+    fetch(`${API}/bundles/${bundleId}/timeline`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => {
         setEvents(d.events || []);

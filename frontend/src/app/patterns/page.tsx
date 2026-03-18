@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 const KNOWN_PATTERNS = [
@@ -107,14 +108,15 @@ export default function PatternsPage() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    fetch(`${API}/bundles`)
+    const headers = getAuthHeaders();
+    fetch(`${API}/bundles`, { headers })
       .then(r => r.json())
       .then(async d => {
         const bundles = (d.bundles || []).filter((b: unknown) => (b as { status?: string }).status === 'completed');
         const patternCounts: Record<string, number> = {};
         for (const bundle of bundles) {
           try {
-            const report = await fetch(`${API}/bundles/${bundle.id}/report`).then(r => r.json());
+            const report = await fetch(`${API}/bundles/${bundle.id}/report`, { headers }).then(r => r.json());
             const findings = report.findings || [];
             findings.forEach((f: unknown) => {
               const ff = f as { title?: string; description?: string; summary?: string };

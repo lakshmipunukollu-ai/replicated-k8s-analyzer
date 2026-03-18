@@ -8,14 +8,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import require_admin
 from app.database import get_db
 from app.models import (
     Bundle,
     Finding,
     Company,
     SuppressionRule,
+    User,
     generate_uuid,
 )
+from app.services.health_score import compute_bundle_health_score
 
 router = APIRouter(prefix="/patterns", tags=["patterns"])
 
@@ -26,7 +29,10 @@ def _title_words(title: str) -> set:
 
 
 @router.get("/cross-company")
-def get_cross_company_patterns(db: Session = Depends(get_db)):
+def get_cross_company_patterns(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
     """Group findings by title similarity; return patterns seen at 2+ companies."""
     bundles = (
         db.query(Bundle)
@@ -143,17 +149,15 @@ def get_app_version_correlation(db: Session = Depends(get_db)):
     company_ids = {b.company_id for b in bundles if b.company_id}
     companies = {c.id: c.name for c in db.query(Company).filter(Company.id.in_(company_ids)).all()}
 
-    def health_score(bundle: Bundle) -> int:
+    def bundle_health(bundle: Bundle) -> int:
         findings = db.query(Finding).filter(Finding.bundle_id == bundle.id).all()
-        critical = len([f for f in findings if f.severity == "critical"])
-        high = len([f for f in findings if f.severity == "high"])
-        return max(0, 100 - critical * 25 - high * 10 - len(findings) * 3)
+        return compute_bundle_health_score(findings)
 
     correlations = []
     for version, version_bundles in sorted(by_version.items(), key=lambda x: x[0] or "", reverse=True):
         if not version:
             continue
-        scores = [health_score(b) for b in version_bundles]
+        scores = [bundle_health(b) for b in version_bundles]
         avg_health = round(sum(scores) / len(scores), 1) if scores else 0
         finding_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
         title_counts = defaultdict(int)

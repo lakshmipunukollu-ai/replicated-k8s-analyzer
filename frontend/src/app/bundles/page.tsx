@@ -6,6 +6,8 @@ import BundleComparison from '@/components/BundleComparison';
 import FindingHeatmap from '@/components/FindingHeatmap';
 import HealthTrendChart from '@/components/HealthTrendChart';
 import SafeAlertSummaryBar from '@/components/SafeAlertSummaryBar';
+import { useAuth } from '@/contexts/AuthContext';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 const API_COMPANIES = `${API}/companies`;
@@ -19,22 +21,24 @@ export default function BundlesPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState<string>('');
   const [showArchived, setShowArchived] = useState(false);
+  const { token } = useAuth();
 
   useEffect(() => {
-    fetch(API_COMPANIES).then((r) => r.json()).then((data) => setCompanies(Array.isArray(data) ? data : [])).catch(() => {});
-  }, []);
+    if (!token) return;
+    fetch(API_COMPANIES, { headers: getAuthHeaders() }).then((r) => r.json()).then((data) => setCompanies(Array.isArray(data) ? data : [])).catch(() => {});
+  }, [token]);
 
   useEffect(() => {
     setProjectId('');
-    if (!companyId) {
+    if (!companyId || !token) {
       setProjects([]);
       return;
     }
-    fetch(`${API}/companies/${companyId}`)
+    fetch(`${API}/companies/${companyId}`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => setProjects(data?.projects || []))
       .catch(() => setProjects([]));
-  }, [companyId]);
+  }, [companyId, token]);
 
   return (
     <div>

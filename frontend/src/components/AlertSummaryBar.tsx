@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -14,9 +15,10 @@ export default function AlertSummaryBar() {
     let cancelled = false;
     async function load() {
       try {
+        const headers = getAuthHeaders();
         const [rulesRes, firingsRes] = await Promise.all([
-          fetch(`${API}/alerts/rules`),
-          fetch(`${API}/alerts/firings`),
+          fetch(`${API}/alerts/rules`, { headers }),
+          fetch(`${API}/alerts/firings`, { headers }),
         ]);
         if (cancelled) return;
         if (!rulesRes.ok || !firingsRes.ok) {

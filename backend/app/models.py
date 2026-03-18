@@ -9,6 +9,20 @@ def generate_uuid():
     return str(uuid.uuid4())
 
 
+class User(Base):
+    __tablename__ = "users"
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=True)
+    role = Column(String(50), default="company_user")  # "admin" or "company_user"
+    company_id = Column(String(36), ForeignKey("companies.id"), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+    company = relationship("Company", back_populates="users")
+
+
 class Company(Base):
     __tablename__ = "companies"
     id = Column(String(36), primary_key=True, default=generate_uuid)
@@ -17,6 +31,7 @@ class Company(Base):
     tier = Column(String(50), default="starter")  # starter, growth, enterprise
     created_at = Column(DateTime, default=datetime.utcnow)
     projects = relationship("Project", back_populates="company", cascade="all, delete-orphan")
+    users = relationship("User", back_populates="company")
 
 
 class Project(Base):

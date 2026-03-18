@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useMemo } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 export interface CorrelationNode {
   id: string;
@@ -103,7 +104,7 @@ export default function CorrelationGraph({
       return;
     }
     const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
-    fetch(`${API}/bundles/${bundleId}/correlations`)
+    fetch(`${API}/bundles/${bundleId}/correlations`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => {
         setNodes(d.nodes || []);
@@ -196,7 +197,7 @@ export default function CorrelationGraph({
     try {
       const res = await fetch(`${API}/bundles/${bundleId}/explain-correlations`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           nodes: filteredNodes.map((n) => ({ title: n.title, severity: n.severity, category: n.category })),
           edges: filteredEdges.map((e) => ({ source: e.source, target: e.target, type: e.type })),

@@ -21,8 +21,12 @@ from app.services.timeline_service import TimelineService
 from app.services.playbook_service import PlaybookService
 from app.services.comparison_service import BundleComparisonService
 from app.services.s3_service import S3Service
+from app.services.health_score import compute_bundle_health_score, compute_bundle_health_score_from_severities
 from app.config import settings
+from app.auth import get_optional_user
+from app.models import User
 import anthropic
+from collections import defaultdict
 
 _s3 = S3Service()
 
@@ -191,10 +195,13 @@ def list_bundles(
     company_id: Optional[str] = None,
     project_id: Optional[str] = None,
     include_archived: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
 ):
-    """List bundles, optionally filtered by company_id, project_id. By default excludes archived; use include_archived=true to list only archived."""
+    """List bundles. If company_user, only their company's bundles; admin or no auth sees all."""
     q = db.query(Bundle).order_by(Bundle.upload_time.desc())
+    if current_user and current_user.role == "company_user" and current_user.company_id:
+        q = q.filter(Bundle.company_id == current_user.company_id)
     if company_id:
         q = q.filter(Bundle.company_id == company_id)
     if project_id:
@@ -204,10 +211,19 @@ def list_bundles(
     else:
         q = q.filter(Bundle.status != "archived")
     bundles = q.all()
+    bundle_ids = [b.id for b in bundles]
+    sev_by_bundle: dict = defaultdict(list)
+    if bundle_ids:
+        for bid, sev in (
+            db.query(Finding.bundle_id, Finding.severity)
+            .filter(Finding.bundle_id.in_(bundle_ids))
+            .all()
+        ):
+            sev_by_bundle[bid].append(sev or "")
 
     bundle_list = []
     for b in bundles:
-        finding_count = db.query(Finding).filter(Finding.bundle_id == b.id).count()
+        finding_count = len(sev_by_bundle[b.id])
         company_name = None
         project_name = None
         if b.company_id:
@@ -226,6 +242,7 @@ def list_bundles(
             analysis_end=b.analysis_end,
             error_message=b.error_message,
             finding_count=finding_count,
+            health_score=compute_bundle_health_score_from_severities(sev_by_bundle[b.id]),
             company_id=b.company_id,
             project_id=b.project_id,
             company_name=company_name,
@@ -733,7 +750,7 @@ def get_customer_report(bundle_id: str, db: Session = Depends(get_db)):
 
     critical = len([f for f in findings if f.severity == "critical"])
     high = len([f for f in findings if f.severity == "high"])
-    health_score = max(0, 100 - critical * 25 - high * 10 - len(findings) * 3)
+    health_score = compute_bundle_health_score(findings)
     health_color = "#10b981" if health_score >= 70 else "#f59e0b" if health_score >= 40 else "#ef4444"
 
     summary_text = bundle.summary or (
@@ -1068,7 +1085,7 @@ def get_bundle_summary(bundle_id: str, db: Session = Depends(get_db)):
 
     critical_count = len([f for f in findings if f.severity == 'critical'])
     high_count = len([f for f in findings if f.severity == 'high'])
-    health_score = max(0, 100 - (critical_count * 25) - (high_count * 10) - (len(findings) * 3))
+    health_score = compute_bundle_health_score(findings)
 
     if bundle.summary and bundle.status == "completed" and len(findings) > 0:
         return {
@@ -1243,9 +1260,7 @@ def reanalyze_bundle(
     current_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
     if current_findings:
         current_version = bundle.version_count or 1
-        critical = len([f for f in current_findings if f.severity == "critical"])
-        high = len([f for f in current_findings if f.severity == "high"])
-        health = max(0, 100 - critical * 25 - high * 10 - len(current_findings) * 3)
+        health = compute_bundle_health_score(current_findings)
         version = AnalysisVersion(
             id=generate_uuid(),
             bundle_id=bundle_id,
@@ -1284,9 +1299,7 @@ def get_analysis_versions(bundle_id: str, db: Session = Depends(get_db)):
     ).order_by(AnalysisVersion.version_number.desc()).all()
 
     current_findings = db.query(Finding).filter(Finding.bundle_id == bundle_id).all()
-    critical = len([f for f in current_findings if f.severity == "critical"])
-    high = len([f for f in current_findings if f.severity == "high"])
-    health = max(0, 100 - critical * 25 - high * 10 - len(current_findings) * 3)
+    health = compute_bundle_health_score(current_findings)
 
     result = [{
         "version_number": (bundle.version_count or 1),
@@ -1349,9 +1362,7 @@ def get_similar_bundles(bundle_id: str, db: Session = Depends(get_db)):
         score = (title_overlap * 0.4 + cat_overlap * 0.3 + word_overlap * 0.3)
 
         if score > 0.05:
-            critical = len([f for f in other_findings if f.severity == "critical"])
-            high = len([f for f in other_findings if f.severity == "high"])
-            health = max(0, 100 - critical * 25 - high * 10 - len(other_findings) * 3)
+            health = compute_bundle_health_score(other_findings)
             results.append({
                 "bundle_id": other.id,
                 "filename": other.filename,
@@ -1595,7 +1606,7 @@ def export_bundle_report(bundle_id: str, body: dict, db: Session = Depends(get_d
 
     critical = [f for f in findings if f.severity == "critical"]
     high = [f for f in findings if f.severity == "high"]
-    health_score = max(0, 100 - len(critical) * 25 - len(high) * 10 - len(findings) * 3)
+    health_score = compute_bundle_health_score(findings)
 
     if export_type == "slack":
         blocks = [
@@ -1669,9 +1680,7 @@ def escalate_bundle(bundle_id: str, body: dict, db: Session = Depends(get_db)):
     else:
         findings = [f for f in all_findings if f.severity in ("critical", "high")]
 
-    critical = len([f for f in findings if f.severity == "critical"])
-    high = len([f for f in findings if f.severity == "high"])
-    health_score = max(0, 100 - critical * 25 - high * 10 - len(all_findings) * 3)
+    health_score = compute_bundle_health_score(all_findings)
 
     title = f"[K8s Incident] {bundle.ai_name or bundle.filename}"
 

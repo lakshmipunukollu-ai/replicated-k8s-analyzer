@@ -1,6 +1,7 @@
 'use client';
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -49,7 +50,7 @@ export default function SearchPage() {
     if (!q.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API}/bundles/search?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`${API}/bundles/search?q=${encodeURIComponent(q)}`, { headers: getAuthHeaders() });
       const data = await res.json();
       setResults(data.results || []);
       setTotal(data.total || 0);

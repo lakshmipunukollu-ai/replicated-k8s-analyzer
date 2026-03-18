@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -68,10 +69,11 @@ export default function AlertsPage() {
   });
 
   const load = () => {
+    const headers = getAuthHeaders();
     Promise.all([
-      fetch(`${API}/alerts/rules`).then((r) => r.json()).catch(() => []),
-      fetch(`${API}/alerts/firings`).then((r) => r.json()).catch(() => []),
-      fetch(`${API}/companies`).then((r) => r.json()).then((d) => d.companies || d || []).catch(() => []),
+      fetch(`${API}/alerts/rules`, { headers }).then((r) => r.json()).catch(() => []),
+      fetch(`${API}/alerts/firings`, { headers }).then((r) => r.json()).catch(() => []),
+      fetch(`${API}/companies`, { headers }).then((r) => r.json()).then((d) => d.companies || d || []).catch(() => []),
     ]).then(([rulesData, firingsData, companiesData]) => {
       setRules(Array.isArray(rulesData) ? rulesData : []);
       setFirings(Array.isArray(firingsData) ? firingsData : []);
@@ -92,7 +94,7 @@ export default function AlertsPage() {
     if (!form.name.trim()) return;
     fetch(`${API}/alerts/rules`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: form.name.trim(),
         description: form.description.trim() || undefined,
@@ -117,7 +119,7 @@ export default function AlertsPage() {
   const handleToggleActive = (rule: Rule) => {
     fetch(`${API}/alerts/rules/${rule.id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: !rule.is_active }),
     })
       .then(() => load())
@@ -125,7 +127,7 @@ export default function AlertsPage() {
   };
 
   const handleTest = (ruleId: string) => {
-    fetch(`${API}/alerts/rules/${ruleId}/test`, { method: 'POST' })
+    fetch(`${API}/alerts/rules/${ruleId}/test`, { method: 'POST', headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => showToast(d.message || (d.would_fire ? 'Would fire' : 'Would not fire')))
       .catch(() => showToast('Test failed', 'err'));
@@ -133,7 +135,7 @@ export default function AlertsPage() {
 
   const handleDelete = (ruleId: string) => {
     if (!confirm('Delete this rule?')) return;
-    fetch(`${API}/alerts/rules/${ruleId}`, { method: 'DELETE' })
+    fetch(`${API}/alerts/rules/${ruleId}`, { method: 'DELETE', headers: getAuthHeaders() })
       .then(() => { load(); showToast('Rule deleted'); })
       .catch(() => showToast('Delete failed', 'err'));
   };

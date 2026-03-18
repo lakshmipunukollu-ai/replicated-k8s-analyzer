@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 const API_COMPANIES = `${API}/companies`;
@@ -29,7 +30,7 @@ export default function CompaniesPage() {
   const router = useRouter();
 
   const load = () => {
-    fetch(API_COMPANIES)
+    fetch(API_COMPANIES, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => {
         setCompanies(Array.isArray(data) ? data : []);
@@ -48,7 +49,7 @@ export default function CompaniesPage() {
     try {
       const res = await fetch(API_COMPANIES, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName.trim(), tier: newTier }),
       });
       if (!res.ok) throw new Error('Failed to create');
@@ -66,7 +67,7 @@ export default function CompaniesPage() {
     if (!deleteModalCompany) return;
     setDeleting(true);
     try {
-      await fetch(`${API_COMPANIES}/${deleteModalCompany.id}`, { method: 'DELETE' });
+      await fetch(`${API_COMPANIES}/${deleteModalCompany.id}`, { method: 'DELETE', headers: getAuthHeaders() });
       setCompanies((prev) => prev.filter((c) => c.id !== deleteModalCompany.id));
       setDeleteModalCompany(null);
     } finally {

@@ -13,19 +13,31 @@ interface Similar {
   shared_findings: string[];
 }
 
+import { getAuthHeaders } from '@/lib/api';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
-export default function SimilarIncidents({ bundleId }: { bundleId: string }) {
-  const [similar, setSimilar] = useState<Similar[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function SimilarIncidents({
+  bundleId,
+  prefetchedSimilar,
+}: {
+  bundleId: string;
+  prefetchedSimilar?: Similar[];
+}) {
+  const [similar, setSimilar] = useState<Similar[]>(prefetchedSimilar ?? []);
+  const [loading, setLoading] = useState(prefetchedSimilar === undefined);
   const router = useRouter();
 
   useEffect(() => {
-    fetch(`${API}/bundles/${bundleId}/similar`)
+    if (prefetchedSimilar !== undefined) {
+      setSimilar(prefetchedSimilar);
+      setLoading(false);
+      return;
+    }
+    fetch(`${API}/bundles/${bundleId}/similar`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => { setSimilar(d.similar || []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [bundleId]);
+  }, [bundleId, prefetchedSimilar]);
 
   if (loading) return (
     <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '16px 20px' }}>

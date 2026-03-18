@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -46,7 +47,7 @@ export default function TriagePage() {
   const router = useRouter();
 
   useEffect(() => {
-    fetch(`${API}/bundles`)
+    fetch(`${API}/bundles`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => setBundles((d.bundles || []).sort((a: BundleRow, b: BundleRow) => new Date(b.upload_time).getTime() - new Date(a.upload_time).getTime())))
       .catch(() => setBundles([]))
@@ -66,7 +67,7 @@ export default function TriagePage() {
     try {
       const res = await fetch(`${API}/bundles/${bundleId}/triage`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ triage_status, assigned_to: assigned_to || undefined }),
       });
       if (!res.ok) return;

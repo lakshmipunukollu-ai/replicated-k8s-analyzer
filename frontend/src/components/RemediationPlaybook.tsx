@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 interface Step { step: number; label: string; type: string; cmd: string; color: string; bg: string; text_color: string; }
 export interface Playbook { finding_title: string; severity: string; steps: Step[]; }
 
+import { getAuthHeaders } from '@/lib/api';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
 export default function RemediationPlaybook({ bundleId, playbook: propPlaybook }: { bundleId: string; playbook?: Playbook[] }) {
@@ -17,7 +18,7 @@ export default function RemediationPlaybook({ bundleId, playbook: propPlaybook }
       setLoading(false);
       return;
     }
-    fetch(`${API}/bundles/${bundleId}/playbook`)
+    fetch(`${API}/bundles/${bundleId}/playbook`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => {
         setPlaybooks(d.playbook || []);

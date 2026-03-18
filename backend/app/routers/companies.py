@@ -1,20 +1,21 @@
 """Companies and projects API."""
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import get_optional_user
 from app.database import get_db
-from app.models import Company, Project, Bundle, Finding
+from app.models import Company, Project, Bundle, Finding, User
+from app.services.health_score import compute_bundle_health_score
 
 router = APIRouter(tags=["companies"])
 
 
 def _health_score(bundle: Bundle, db: Session) -> int:
     findings = db.query(Finding).filter(Finding.bundle_id == bundle.id).all()
-    critical = len([f for f in findings if f.severity == "critical"])
-    high = len([f for f in findings if f.severity == "high"])
-    return max(0, 100 - critical * 25 - high * 10 - len(findings) * 3)
+    return compute_bundle_health_score(findings)
 
 
 class CompanyCreate(BaseModel):
@@ -28,9 +29,15 @@ class ProjectCreate(BaseModel):
 
 
 @router.get("/companies")
-def list_companies(db: Session = Depends(get_db)):
-    """List all companies with project_count, bundle_count, avg_health_score."""
-    companies = db.query(Company).all()
+def list_companies(
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """List companies. If company_user, only their company; admin or no auth sees all."""
+    if current_user and current_user.role == "company_user" and current_user.company_id:
+        companies = db.query(Company).filter(Company.id == current_user.company_id).all()
+    else:
+        companies = db.query(Company).all()
     result = []
     for c in companies:
         project_count = db.query(Project).filter(Project.company_id == c.id).count()
@@ -131,9 +138,7 @@ def get_company(company_id: str, db: Session = Depends(get_db)):
     health_history = []
     for b in company_bundles:
         findings = db.query(Finding).filter(Finding.bundle_id == b.id).all()
-        critical = len([f for f in findings if f.severity == "critical"])
-        high = len([f for f in findings if f.severity == "high"])
-        health_score = max(0, 100 - critical * 25 - high * 10 - len(findings) * 3)
+        health_score = compute_bundle_health_score(findings)
         health_history.append({
             "date": b.upload_time.isoformat() if b.upload_time else None,
             "health_score": health_score,

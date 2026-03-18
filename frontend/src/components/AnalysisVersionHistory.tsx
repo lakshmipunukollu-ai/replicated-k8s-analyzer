@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 interface Version {
   version_number: number;
@@ -19,7 +20,7 @@ export default function AnalysisVersionHistory({ bundleId, onReanalyze }: { bund
   const [expanded, setExpanded] = useState<number | null>(null);
 
   const load = () => {
-    fetch(`${API}/bundles/${bundleId}/versions`)
+    fetch(`${API}/bundles/${bundleId}/versions`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => { setVersions(d.versions || []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -30,7 +31,7 @@ export default function AnalysisVersionHistory({ bundleId, onReanalyze }: { bund
   const handleReanalyze = async () => {
     setReanalyzing(true);
     try {
-      await fetch(`${API}/bundles/${bundleId}/reanalyze`, { method: 'POST' });
+      await fetch(`${API}/bundles/${bundleId}/reanalyze`, { method: 'POST', headers: getAuthHeaders() });
       setTimeout(() => {
         setReanalyzing(false);
         onReanalyze?.();

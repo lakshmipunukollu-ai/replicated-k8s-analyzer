@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 interface Bundle { id: string; filename: string; finding_count: number; }
 interface CompareResult {
@@ -20,7 +21,7 @@ export default function BundleComparison() {
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
   useEffect(() => {
-    fetch(`${API}/bundles`)
+    fetch(`${API}/bundles`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => setBundles(d.bundles || []))
       .catch(() => setBundles([]));
@@ -32,7 +33,7 @@ export default function BundleComparison() {
     try {
       const res = await fetch(`${API}/bundles/compare`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ bundle_a_id: selectedA, bundle_b_id: selectedB }),
       });
       setResult(await res.json());

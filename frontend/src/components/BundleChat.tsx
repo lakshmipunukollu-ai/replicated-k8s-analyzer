@@ -1,5 +1,6 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 interface Message { role: 'user' | 'ai'; text: string; }
 
@@ -23,7 +24,7 @@ export default function BundleChat({ bundleId }: { bundleId: string }) {
       const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
       const res = await fetch(`${API}/bundles/${bundleId}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ question }),
       });
       const data = await res.json();

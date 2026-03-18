@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
@@ -40,19 +41,19 @@ export default function SuppressionPage() {
   const [prefillPattern, setPrefillPattern] = useState<string | null>(null);
 
   const loadRules = () => {
-    fetch(`${API}/patterns/suppression-rules`)
+    fetch(`${API}/patterns/suppression-rules`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => setRules(d.rules || []))
       .catch(() => setRules([]));
   };
   const loadCompanies = () => {
-    fetch(`${API}/companies`)
+    fetch(`${API}/companies`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => setCompanies(Array.isArray(d) ? d : []))
       .catch(() => setCompanies([]));
   };
   const loadPatterns = () => {
-    fetch(`${API}/patterns/cross-company`)
+    fetch(`${API}/patterns/cross-company`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((d) => setPatterns(d.patterns || []))
       .catch(() => setPatterns([]));
@@ -82,7 +83,7 @@ export default function SuppressionPage() {
     setError(null);
     fetch(`${API}/patterns/suppression-rules`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         company_id: companyId || undefined,
         pattern,
@@ -109,7 +110,7 @@ export default function SuppressionPage() {
   const toggleActive = (ruleId: string, current: boolean) => {
     fetch(`${API}/patterns/suppression-rules/${ruleId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ is_active: !current }),
     })
       .then((r) => { if (r.ok) loadRules(); })
@@ -118,7 +119,7 @@ export default function SuppressionPage() {
 
   const deleteRule = (ruleId: string) => {
     if (!confirm('Delete this suppression rule?')) return;
-    fetch(`${API}/patterns/suppression-rules/${ruleId}`, { method: 'DELETE' })
+    fetch(`${API}/patterns/suppression-rules/${ruleId}`, { method: 'DELETE', headers: getAuthHeaders() })
       .then((r) => { if (r.ok) loadRules(); })
       .catch(() => {});
   };

@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 interface Finding { id: string; title?: string; severity?: string; }
 
@@ -18,7 +19,7 @@ export default function ExportReport({ bundleId }: { bundleId: string; filename:
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
   useEffect(() => {
-    fetch(`${API}/bundles/${bundleId}/report`)
+    fetch(`${API}/bundles/${bundleId}/report`, { headers: getAuthHeaders() })
       .then((r) => r.json())
       .then((data) => {
         const list = (data.findings || []) as Finding[];
@@ -43,7 +44,7 @@ export default function ExportReport({ bundleId }: { bundleId: string; filename:
     try {
       const res = await fetch(`${API}/bundles/${bundleId}/export`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, use_ai_title: true }),
       });
       const data = await res.json();
@@ -157,7 +158,7 @@ export default function ExportReport({ bundleId }: { bundleId: string; filename:
             try {
               const res = await fetch(`${API}/bundles/${bundleId}/escalate`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   platform: 'github',
                   github_repo: githubRepo.trim(),

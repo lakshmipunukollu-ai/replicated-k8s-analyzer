@@ -1,5 +1,12 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3010';
 
+export function getAuthHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const token = localStorage.getItem('auth_token');
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
 export interface Bundle {
   id: string;
   filename: string;
@@ -49,20 +56,20 @@ export interface SSEEvent {
 }
 
 export async function fetchBundles(): Promise<Bundle[]> {
-  const res = await fetch(`${API_BASE}/bundles`);
+  const res = await fetch(`${API_BASE}/bundles`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch bundles');
   const data = await res.json();
   return data.bundles;
 }
 
 export async function fetchBundle(id: string): Promise<Bundle> {
-  const res = await fetch(`${API_BASE}/bundles/${id}`);
+  const res = await fetch(`${API_BASE}/bundles/${id}`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch bundle');
   return res.json();
 }
 
 export async function fetchReport(id: string): Promise<Report> {
-  const res = await fetch(`${API_BASE}/bundles/${id}/report`);
+  const res = await fetch(`${API_BASE}/bundles/${id}/report`, { headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to fetch report');
   return res.json();
 }
@@ -72,6 +79,7 @@ export async function uploadBundle(file: File): Promise<Bundle> {
   formData.append('file', file);
   const res = await fetch(`${API_BASE}/bundles/upload`, {
     method: 'POST',
+    headers: getAuthHeaders(),
     body: formData,
   });
   if (!res.ok) {
@@ -82,7 +90,7 @@ export async function uploadBundle(file: File): Promise<Bundle> {
 }
 
 export async function triggerAnalysis(id: string): Promise<{ bundle_id: string; status: string; message: string }> {
-  const res = await fetch(`${API_BASE}/bundles/${id}/analyze`, { method: 'POST' });
+  const res = await fetch(`${API_BASE}/bundles/${id}/analyze`, { method: 'POST', headers: getAuthHeaders() });
   if (!res.ok) throw new Error('Failed to start analysis');
   return res.json();
 }

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { getAuthHeaders } from '@/lib/api';
 
 interface DayData {
   date: string;
@@ -15,7 +16,7 @@ export default function FindingHeatmap() {
   const [tooltip, setTooltip] = useState<{ day: DayData; x: number; y: number } | null>(null);
 
   useEffect(() => {
-    fetch(`${API}/bundles`)
+    fetch(`${API}/bundles`, { headers: getAuthHeaders() })
       .then(r => r.json())
       .then(d => {
         const bundles = d.bundles || [];
